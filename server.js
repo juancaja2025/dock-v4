@@ -403,7 +403,7 @@ app.get('/', (req, res) => {
 // ==================== PÁGINA ENTRADA (CHOFERES) ====================
 app.get('/entrada', (req, res) => {
   const carriers = [
-    "Acaricia Transporte Logan","Adrian Servicio","Alfa Omega","Americantec","Andesmar","Apicol","ASPELEYTER","Avaltrans","AYG Trucks",
+    "Acaricia Transporte Logan","Adrian Servicio","Alfa Omega","Americantec","Andesmar","Andreani","Apicol","ASPELEYTER","Avaltrans","AYG Trucks",
     "Bahia SRL","Balboa","Bataglia","Beira Mar","Bessone","Better Catering","Biopak","BL Puerto y Logística","Blanca Luna","Brouclean","Bulonera Central","Bulonera Pacheco",
     "Camila Duarte","Cantarini","CASA Thames","CBC Group","CFA Fumigación","Ciari","Cimes","CISA","CLSA","Comercial Ñandubay","Container Leasing","CORREO Urbano","Cruz del Sur","CST Transporte",
     "DATULI","Del Valle","DHL","Don Antonio","Don Gumer","DPD","Duro",
