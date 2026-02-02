@@ -204,12 +204,10 @@ const styles = `
   .header-left { display: flex; align-items: center; gap: 16px; }
   .assign-row { display: flex; gap: 8px; margin-top: 12px; align-items: stretch; }
   .assign-row select { 
-    flex: 1; margin: 0; padding: 16px; font-size: 18px; font-weight: 600;
-    min-height: 56px; -webkit-appearance: none; appearance: none;
-    background: rgba(255,255,255,0.1) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='white' d='M6 8L1 3h10z'/%3E%3C/svg%3E") no-repeat right 16px center;
-    background-size: 12px;
-  }
-  .assign-row button { flex: 0 0 auto; margin: 0; padding: 16px 24px; min-height: 56px; font-size: 16px; }
+    flex: 2; margin: 0; padding: 16px; font-size: 18px; font-weight: 600;
+    min-height: 56px; min-width: 0;
+}
+  .assign-row button { flex: 1; margin: 0; padding: 16px 12px; min-height: 56px; font-size: 16px; white-space: nowrap; }
   .refresh-notice { 
     text-align: center; color: ${colors.light}; font-size: 13px; 
     margin-top: 20px; opacity: 0.6;
