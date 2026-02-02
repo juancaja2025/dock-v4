@@ -206,7 +206,7 @@ const styles = `
   .assign-row select { 
     flex: 2; margin: 0; padding: 16px; font-size: 18px; font-weight: 600;
     min-height: 56px; min-width: 0;
-}
+  }
   .assign-row button { flex: 1; margin: 0; padding: 16px 12px; min-height: 56px; font-size: 16px; white-space: nowrap; }
   .refresh-notice { 
     text-align: center; color: ${colors.light}; font-size: 13px; 
@@ -238,8 +238,9 @@ function formatDateTime(date) {
 
 // Registrar entrada
 app.post('/api/entrada', async (req, res) => {
-  const { truck } = req.body;
+  const { truck, carrier } = req.body;
   if (!truck) return res.json({ success: false, error: 'Patente requerida' });
+  if (!carrier) return res.json({ success: false, error: 'Seleccioná un transportista' });
   
   try {
     // Buscar turno activo existente
@@ -256,8 +257,8 @@ app.post('/api/entrada', async (req, res) => {
     const turnoId = await generarId();
     await pool.query(
       `INSERT INTO turnos (turno_id, truck, carrier, type, status, ts_entrada) 
-       VALUES ($1, $2, 'Por asignar', 'INBOUND', 'ESPERANDO_ASIGNACION', CURRENT_TIMESTAMP)`,
-      [turnoId, truck.toUpperCase()]
+       VALUES ($1, $2, $3, 'INBOUND', 'ESPERANDO_ASIGNACION', CURRENT_TIMESTAMP)`,
+      [turnoId, truck.toUpperCase(), carrier]
     );
     
     res.json({ success: true, id: turnoId, existing: false });
@@ -401,26 +402,64 @@ app.get('/', (req, res) => {
 
 // ==================== PÁGINA ENTRADA (CHOFERES) ====================
 app.get('/entrada', (req, res) => {
+  const carriers = [
+    "Acaricia Transporte Logan","Adrian Servicio","Alfa Omega","Americantec","Andesmar","Apicol","ASPELEYTER","Avaltrans","AYG Trucks",
+    "Bahia SRL","Balboa","Bataglia","Beira Mar","Bessone","Better Catering","Biopak","BL Puerto y Logística","Blanca Luna","Brouclean","Bulonera Central","Bulonera Pacheco",
+    "Camila Duarte","Cantarini","CASA Thames","CBC Group","CFA Fumigación","Ciari","Cimes","CISA","CLSA","Comercial Ñandubay","Container Leasing","CORREO Urbano","Cruz del Sur","CST Transporte",
+    "DATULI","Del Valle","DHL","Don Antonio","Don Gumer","DPD","Duro",
+    "Enviopack","EPSA","Erbas","EURO Packaging","Expreso Oro Negro",
+    "Failde","FAILE","Flecha Lok","FM Transporte","FRATI","Fravega","FIS Logística",
+    "Gabcin","Gentile","Grabet","Grasso","Grupo GLI","Grupo Luro","Grupo Silco","Guevara Fletes",
+    "HDL Transporte","HECA","HFL","HIMP A","Hornero",
+    "IAFRATELLI","IFLOW","Impresur","Internavegación","INTERMEDIO","Id Group",
+    "Joaquin","JM Yaya e Hijos","Juarez",
+    "La Sevillanita","La Tablada","LEO Trucks","Lir","Loginter","Logística del Valle","Logística Giménez","Logística Integral Romano","Logística Soria","Logitech","Lomas del Mirador","LTN","Luisito","Lugone","Ludamany",
+    "Marra e Hijos","Marino","MARIANO","Maringa","MAV","Meli (Mercado Libre)","MICHELIN (Mantenimiento)","Mirtrans","Moova","Moreiro","Multarys Traslados",
+    "Nahuel Remolques","Navarro","NB Cargo","Newsan","Nieva","Norlog","Norte",
+    "OCA","OCASA","Oliveri Transporte","Onetrade","Oro Negro","Oriente Elevadores",
+    "Pabile","Paganini","PANGEA","Parra","Pavile","PEF","PLK Group","Promei","Provenzano","PYTEL",
+    "QX",
+    "Ragazzi","Reyna Isabel","Romano","Ruta 21 DPD",
+    "Saff","Sainz","SERVINTAR","SERVITRAN","SIARI","Sipe","Spineta","STC","SUMAR Servicio Industrial",
+    "Técnica Lift","Techin","TGC Autoelevadores","Thames","Toledo","Transporte del Valle","Transporte Grasso","Transporte Juarez","Transporte Norte","Transporte Trejo","Tronador",
+    "Unibrick","Unión Logística","Unitrans","Urbano Logística",
+    "Vega","VOLKOV","Vento",
+    "Webpack","WBL",
+    "Otros"
+  ];
+  const carrierOptions = carriers.map(c => `<option value="${c}">${c}</option>`).join('');
+  
   res.send(`
     <!DOCTYPE html>
     <html><head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
       <title>Entrada - OCASA Dock Manager</title>
-      <style>${styles}</style>
+      <style>${styles}
+        #carrier { padding: 16px; font-size: 18px; min-height: 56px; }
+        label { display: block; text-align: left; color: ${colors.muted}; font-size: 14px; margin-bottom: 4px; margin-top: 12px; font-weight: 600; }
+      </style>
     </head><body>
       <div class="container" style="text-align: center; padding-top: 40px;">
         <img src="${logoSrc}" alt="OCASA" class="logo-large">
         <div class="icon-circle icon-primary">🚛</div>
         <h1>Registro de Ingreso</h1>
-        <p class="subtitle">Ingresá tu patente para registrarte</p>
+        <p class="subtitle">Completá los datos para registrarte</p>
         
         <div id="error" class="error" style="display:none;"></div>
         <div id="success" class="success" style="display:none;"></div>
         
         <div class="card">
+          <label>PATENTE</label>
           <input type="text" id="truck" placeholder="Ej: AA-123-BB" maxlength="10"
                  style="text-transform: uppercase; font-family: monospace; font-size: 24px; text-align: center;">
+          
+          <label>TRANSPORTISTA</label>
+          <select id="carrier">
+            <option value="" disabled selected>Seleccioná transportista...</option>
+            ${carrierOptions}
+          </select>
+          
           <button class="btn btn-primary" onclick="registrar()" id="btnSubmit">
             🚛 Registrar Ingreso
           </button>
@@ -430,13 +469,14 @@ app.get('/entrada', (req, res) => {
       <script>
         document.getElementById('truck').addEventListener('keyup', function(e) {
           this.value = this.value.toUpperCase();
-          if (e.key === 'Enter') registrar();
         });
         document.getElementById('truck').focus();
         
         async function registrar() {
           const truck = document.getElementById('truck').value.trim();
+          const carrier = document.getElementById('carrier').value;
           if (!truck) { showError('Ingresá tu patente'); return; }
+          if (!carrier) { showError('Seleccioná un transportista'); return; }
           
           document.getElementById('btnSubmit').disabled = true;
           document.getElementById('btnSubmit').innerHTML = '⏳ Procesando...';
@@ -445,7 +485,7 @@ app.get('/entrada', (req, res) => {
             const res = await fetch('/api/entrada', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ truck })
+              body: JSON.stringify({ truck, carrier })
             });
             const data = await res.json();
             
