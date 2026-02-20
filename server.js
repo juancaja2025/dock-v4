@@ -818,11 +818,22 @@ app.get('/operador', (req, res) => {
       <script>
         let allTurnos = [];
         
+let prevEsperando = -1;
+        const beep = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdH2LkZSPgHBkYW94hpGZmI+AdWlmb3yIkpaSiX5za2tyfoeQk46CdmtqcHmEjI+MgXZtanF5g4uOi4F2bmpxeYOKjYqAd25rcXiDioyKgHdua3J4g4qMioB3bmtxeIOKjIqAd25rcXmDioyJf3duanF5g4qMiX94bmtxeYOKjIl/eG5rcXmDiYuJf3huanF5g4mLiYB4bmtxeYOJi4mAeG5rcXmDiYuJgHhua3F5g4mLiYB4bmtxeYOJi4mAeG5rcXmDiYuJgHhua3F5g4mLiX94bmtxeYOJi4l/eG5rcnmDiYuJf3huanJ5g4mLiX94bmpyeYOJioh/eG5qcnmDiYqIf3huana');
+        
         async function loadData() {
           try {
             const res = await fetch('/api/turnos');
             const data = await res.json();
             allTurnos = data.turnos || [];
+            
+            // Alerta sonora cuando entra camión nuevo
+            const esperando = allTurnos.filter(t => t.status === 'ESPERANDO_ASIGNACION').length;
+            if (esperando > prevEsperando && prevEsperando >= 0) {
+              beep.play().catch(() => {});
+            }
+            prevEsperando = esperando;
+            
             renderKPIs();
             renderTurnos();
             renderDocks();
