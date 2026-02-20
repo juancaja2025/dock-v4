@@ -784,7 +784,8 @@ app.get('/operador', (req, res) => {
           <div class="header-left">
             <img src="${logoSrc}" alt="OCASA" class="logo">
             <div>
-              <h1>Panel Operador</h1>
+           <h1>Panel Operador</h1>
+          <button id="audioBtn" onclick="enableAudio()" style="background: rgba(255,193,7,0.2); border: 1px solid #ffc107; color: #ffc107; padding: 8px 16px; border-radius: 8px; font-size: 14px; cursor: pointer; margin-bottom: 16px;">🔔 Activar sonido</button>
               <p class="subtitle" style="margin:0;">Gestión de dársenas y turnos</p>
             </div>
           </div>
@@ -849,7 +850,7 @@ let prevEsperando = -1;
             // Alerta sonora cuando entra camión nuevo
             const esperando = allTurnos.filter(t => t.status === 'ESPERANDO_ASIGNACION').length;
             if (esperando > prevEsperando && prevEsperando >= 0) {
-              beep.play().catch(() => {});
+              playAlert();
             }
             prevEsperando = esperando;
             
