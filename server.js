@@ -1199,7 +1199,101 @@ app.get('/garita', (req, res) => {
     </body></html>
   `);
 });
+// ==================== PÁGINA ADMIN (OCULTA) ====================
+app.get('/admin', (req, res) => {
+  res.send(`
+    <!DOCTYPE html>
+    <html><head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>Admin - OCASA Dock Manager</title>
+      <style>${styles}</style>
+    </head><body>
+      <div class="container">
+        <img src="${logoSrc}" alt="OCASA" class="logo">
+        <h1>🔐 Administración</h1>
+        
+        <div id="login" class="card">
+          <input type="password" id="pass" placeholder="Contraseña" style="width:100%; padding:16px; font-size:18px; border-radius:8px; border:none; margin-bottom:12px;">
+          <button onclick="login()" style="width:100%;">Ingresar</button>
+        </div>
+        
+        <div id="panel" style="display:none;">
+          <div class="card">
+            <h2 style="margin-top:0;">Limpiar Base de Datos</h2>
+            <button onclick="borrar('egresados')" style="width:100%; background:#ffc107; margin-bottom:12px;">🧹 Borrar turnos finalizados</button>
+            <button onclick="borrar('viejos')" style="width:100%; background:#ff9800; margin-bottom:12px;">📅 Borrar turnos +7 días</button>
+            <button onclick="borrar('todos')" style="width:100%; background:#dc3545;">🗑️ Borrar TODOS los turnos</button>
+          </div>
+          <div id="resultado" class="card" style="display:none; margin-top:16px;"></div>
+        </div>
+      </div>
+      
+      <script>
+        function login() {
+          const pass = document.getElementById('pass').value;
+          if (pass === 'Newsanpilar2026') {
+            document.getElementById('login').style.display = 'none';
+            document.getElementById('panel').style.display = 'block';
+          } else {
+            alert('Contraseña incorrecta');
+          }
+        }
+        
+        async function borrar(tipo) {
+          const msgs = {
+            'egresados': '¿Borrar todos los turnos FINALIZADOS?',
+            'viejos': '¿Borrar turnos de hace más de 7 días?',
+            'todos': '⚠️ ¿BORRAR TODOS LOS TURNOS? Esta acción no se puede deshacer.'
+          };
+          
+          if (!confirm(msgs[tipo])) return;
+          if (tipo === 'todos' && !confirm('¿Estás SEGURO? Se perderán todos los datos.')) return;
+          
+          const res = await fetch('/api/admin/limpiar', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ tipo, pass: 'Newsanpilar2026' })
+          });
+          const data = await res.json();
+          
+          document.getElementById('resultado').style.display = 'block';
+          document.getElementById('resultado').innerHTML = data.success 
+            ? '<p style="color:#8fbf4c;">✅ ' + data.mensaje + '</p>'
+            : '<p style="color:#dc3545;">❌ ' + data.error + '</p>';
+        }
+      </script>
+    </body></html>
+  `);
+});
 
+app.post('/api/admin/limpiar', async (req, res) => {
+  const { tipo, pass } = req.body;
+  
+  if (pass !== 'Newsanpilar2026') {
+    return res.json({ success: false, error: 'No autorizado' });
+  }
+  
+  try {
+    let result;
+    switch(tipo) {
+      case 'egresados':
+        result = await pool.query("DELETE FROM turnos WHERE status = 'EGRESADO'");
+        break;
+      case 'viejos':
+        result = await pool.query("DELETE FROM turnos WHERE ts_entrada < NOW() - INTERVAL '7 days'");
+        break;
+      case 'todos':
+        result = await pool.query("DELETE FROM turnos");
+        break;
+      default:
+        return res.json({ success: false, error: 'Tipo inválido' });
+    }
+    res.json({ success: true, mensaje: `${result.rowCount} turnos eliminados` });
+  } catch(e) {
+    res.json({ success: false, error: e.message });
+  }
+});
 // ===================== INICIAR SERVIDOR =====================
 app.listen(PORT, () => {
   console.log(`🚛 OCASA Dock Manager corriendo en puerto ${PORT}`);
