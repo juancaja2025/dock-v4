@@ -817,10 +817,29 @@ app.get('/operador', (req, res) => {
       
       <script>
         let allTurnos = [];
-        
 let prevEsperando = -1;
-        const beep = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdH2LkZSPgHBkYW94hpGZmI+AdWlmb3yIkpaSiX5za2tyfoeQk46CdmtqcHmEjI+MgXZtanF5g4uOi4F2bmpxeYOKjYqAd25rcXiDioyKgHdua3J4g4qMioB3bmtxeIOKjIqAd25rcXmDioyJf3duanF5g4qMiX94bmtxeYOKjIl/eG5rcXmDiYuJf3huanF5g4mLiYB4bmtxeYOJi4mAeG5rcXmDiYuJgHhua3F5g4mLiYB4bmtxeYOJi4mAeG5rcXmDiYuJgHhua3F5g4mLiX94bmtxeYOJi4l/eG5rcnmDiYuJf3huanJ5g4mLiX94bmpyeYOJioh/eG5qcnmDiYqIf3huana');
+        let audioEnabled = false;
         
+        function playAlert() {
+          if (!audioEnabled) return;
+          const ctx = new (window.AudioContext || window.webkitAudioContext)();
+          const o = ctx.createOscillator();
+          const g = ctx.createGain();
+          o.connect(g);
+          g.connect(ctx.destination);
+          o.frequency.value = 800;
+          g.gain.value = 0.3;
+          o.start();
+          o.stop(ctx.currentTime + 0.3);
+        }
+        
+        function enableAudio() {
+          audioEnabled = true;
+          document.getElementById('audioBtn').innerHTML = '🔊 Sonido activado';
+          document.getElementById('audioBtn').style.background = 'rgba(143,191,76,0.3)';
+          document.getElementById('audioBtn').style.borderColor = '#8fbf4c';
+        }        
+
         async function loadData() {
           try {
             const res = await fetch('/api/turnos');
