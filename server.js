@@ -589,6 +589,12 @@ app.get('/turno/:id', (req, res) => {
           html += renderTimelineItem(t.ts_egreso, 'Egreso', t.status === 'DESATRACADO');
           
           html += '</div></div>';
+          // Safety notice
+          html += '<div class="card" style="background: rgba(255,193,7,0.15); border: 1px solid rgba(255,193,7,0.4); margin-top: 16px;">';
+          html += '<p style="margin: 0; font-weight: 600; color: #ffc107;">⚠️ PUNTOS A TENER EN CUENTA</p>';
+          html += '<p style="margin: 8px 0 0 0; font-size: 14px; color: #efefef;">• Usar <strong>zapatos de seguridad</strong></p>';
+          html += '<p style="margin: 4px 0 0 0; font-size: 14px; color: #efefef;">• Usar <strong>chaleco reflectivo</strong></p>';
+          html += '</div>';
           html += '<p class="refresh-notice">🔄 Actualizando automáticamente</p>';
           
           document.getElementById('content').innerHTML = html;
