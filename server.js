@@ -841,6 +841,16 @@ let prevEsperando = -1;
           document.getElementById('audioBtn').style.borderColor = '#8fbf4c';
         }        
 
+let activeSelect = null;
+        
+        // Detectar cuando alguien está usando un select
+        document.addEventListener('focus', (e) => {
+          if (e.target.tagName === 'SELECT') activeSelect = e.target.id;
+        }, true);
+        document.addEventListener('blur', (e) => {
+          if (e.target.tagName === 'SELECT') setTimeout(() => activeSelect = null, 100);
+        }, true);
+        
         async function loadData() {
           try {
             const res = await fetch('/api/turnos');
@@ -855,8 +865,11 @@ let prevEsperando = -1;
             prevEsperando = esperando;
             
             renderKPIs();
-            renderTurnos();
-            renderDocks();
+            // No re-renderizar si están usando un select
+            if (!activeSelect) {
+              renderTurnos();
+              renderDocks();
+            }
           } catch(e) {
             console.error(e);
           }
