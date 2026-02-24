@@ -306,7 +306,18 @@ app.post('/api/asignar', async (req, res) => {
     if (turno.rows[0].status !== 'ESPERANDO_ASIGNACION') {
       return res.json({ success: false, error: 'El turno ya tiene dársena asignada' });
     }
-    
+    app.post('/api/reasignar', async (req, res) => {
+  const { turnoId, dock, warehouse } = req.body;
+  try {
+    await pool.query(
+      `UPDATE turnos SET dock = $1, warehouse = $2, status = 'DARSENA_ASIGNADA', ts_asignacion = NOW(), ts_atracado = NULL, ts_desatracado = NULL WHERE turno_id = $3`,
+      [dock, warehouse, turnoId]
+    );
+    res.json({ success: true });
+  } catch(e) {
+    res.json({ success: false, error: e.message });
+  }
+});
     // Verificar que el dock no esté ocupado
     const dockCheck = await pool.query(
       "SELECT * FROM turnos WHERE dock = $1 AND status NOT IN ('EGRESADO', 'DESATRACADO')",
@@ -901,7 +912,7 @@ let activeSelect = null;
             html += '<div class="time">' + formatTime(t.ts_entrada) + '</div>';
             html += '</div></div>';
             
-            if (t.status === 'ESPERANDO_ASIGNACION') {
+if (t.status === 'ESPERANDO_ASIGNACION') {
               html += '<div class="assign-row">';
               html += '<select id="dock-' + t.turno_id + '">';
               for (let i = 1; i <= 40; i++) {
@@ -911,6 +922,20 @@ let activeSelect = null;
               }
               html += '</select>';
               html += '<button class="btn btn-green" onclick="event.stopPropagation(); asignar(\\'' + t.turno_id + '\\')">Asignar</button>';
+              html += '</div>';
+            }
+            
+            if (t.status === 'DESATRACADO') {
+              html += '<div class="assign-row">';
+              html += '<select id="reasign-' + t.turno_id + '">';
+              html += '<option value="">🔄 Reasignar dock (opcional)</option>';
+              for (let i = 1; i <= 40; i++) {
+                const d = 'D-' + String(i).padStart(2, '0');
+                const ocupada = allTurnos.some(x => x.dock === d && x.status !== 'EGRESADO' && x.status !== 'DESATRACADO');
+                if (!ocupada) html += '<option value="' + d + '">' + d + '</option>';
+              }
+              html += '</select>';
+              html += '<button class="btn btn-orange" onclick="event.stopPropagation(); reasignar(\\'' + t.turno_id + '\\')">Reasignar</button>';
               html += '</div>';
             }
           });
@@ -960,7 +985,30 @@ let activeSelect = null;
             alert('Error de conexión');
           }
         }
-        
+        async function reasignar(turnoId) {
+          const dock = document.getElementById('reasign-' + turnoId).value;
+          if (!dock) {
+            alert('Seleccioná un dock para reasignar');
+            return;
+          }
+          const warehouse = parseInt(dock.split('-')[1]) <= 20 ? 'Nave 1' : 'Nave 2';
+          
+          try {
+            const res = await fetch('/api/reasignar', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ turnoId, dock, warehouse })
+            });
+            const data = await res.json();
+            if (data.success) {
+              loadData();
+            } else {
+              alert(data.error);
+            }
+          } catch(e) {
+            alert('Error de conexión');
+          }
+        }
         function showDetail(turnoId) {
           const t = allTurnos.find(x => x.turno_id === turnoId);
           if (!t) return;
