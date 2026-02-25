@@ -838,18 +838,41 @@ app.get('/operador', (req, res) => {
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
       <title>Panel Operador - OCASA Dock Manager</title>
-      <style>${styles}</style>
+      <style>${styles}
+        .nav-tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+        .nav-tab { flex: 1; padding: 12px; border: 2px solid ${colors.primary}; background: transparent; color: ${colors.primary}; border-radius: 8px; font-size: 16px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+        .nav-tab.active { background: ${colors.primary}; color: white; }
+        .turno-row { display: flex; align-items: center; gap: 12px; padding: 12px; background: rgba(255,255,255,0.05); border-radius: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+        .turno-row:hover { background: rgba(255,255,255,0.1); }
+        .turno-info-main { flex: 1; min-width: 200px; }
+        .turno-info-main h3 { margin: 0; font-size: 16px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .turno-info-main p { margin: 4px 0 0 0; font-size: 13px; color: ${colors.muted}; }
+        .turno-actions { display: flex; gap: 8px; align-items: center; }
+        .turno-actions select { padding: 8px 12px; font-size: 14px; min-height: 40px; border-radius: 6px; min-width: 100px; }
+        .turno-actions button { padding: 8px 16px; font-size: 14px; min-height: 40px; white-space: nowrap; }
+        .op-badge { font-size: 11px; padding: 2px 6px; border-radius: 4px; font-weight: 600; }
+        .op-descarga { background: #dc3545; color: white; }
+        .op-colecta { background: #0d6efd; color: white; }
+        .dock-cell { cursor: pointer; transition: transform 0.1s; }
+        .dock-cell:hover { transform: scale(1.1); }
+      </style>
     </head><body>
       <div class="container-wide">
         <div class="header">
           <div class="header-left">
             <img src="${logoSrc}" alt="OCASA" class="logo">
             <div>
-           <h1>Panel Operador</h1>
-          <button id="audioBtn" onclick="enableAudio()" style="background: rgba(255,193,7,0.2); border: 1px solid #ffc107; color: #ffc107; padding: 8px 16px; border-radius: 8px; font-size: 14px; cursor: pointer; margin-bottom: 16px;">🔔 Activar sonido</button>
+              <h1>Panel Operador</h1>
               <p class="subtitle" style="margin:0;">Gestión de dársenas y turnos</p>
             </div>
           </div>
+          <button id="audioBtn" onclick="enableAudio()" style="background: rgba(255,193,7,0.2); border: 1px solid #ffc107; color: #ffc107; padding: 8px 16px; border-radius: 8px; font-size: 14px; cursor: pointer;">🔔 Activar sonido</button>
+        </div>
+        
+        <div class="nav-tabs">
+          <button class="nav-tab active" onclick="setFilter('PL2')" id="tab-PL2">🏭 PL2</button>
+          <button class="nav-tab" onclick="setFilter('PL3')" id="tab-PL3">🏭 PL3</button>
+          <button class="nav-tab" onclick="setFilter('TODOS')" id="tab-TODOS">📋 Todos</button>
         </div>
         
         <div class="grid-2" id="kpis">
@@ -879,8 +902,18 @@ app.get('/operador', (req, res) => {
       
       <script>
         let allTurnos = [];
-let prevEsperando = -1;
+        let currentFilter = 'PL2';
+        let prevEsperando = -1;
         let audioEnabled = false;
+        let activeSelect = null;
+        
+        // Detectar cuando alguien está usando un select
+        document.addEventListener('focus', (e) => {
+          if (e.target.tagName === 'SELECT') activeSelect = e.target.id;
+        }, true);
+        document.addEventListener('blur', (e) => {
+          if (e.target.tagName === 'SELECT') setTimeout(() => activeSelect = null, 100);
+        }, true);
         
         function playAlert() {
           if (!audioEnabled) return;
@@ -900,17 +933,15 @@ let prevEsperando = -1;
           document.getElementById('audioBtn').innerHTML = '🔊 Sonido activado';
           document.getElementById('audioBtn').style.background = 'rgba(143,191,76,0.3)';
           document.getElementById('audioBtn').style.borderColor = '#8fbf4c';
-        }        
-
-let activeSelect = null;
+        }
         
-        // Detectar cuando alguien está usando un select
-        document.addEventListener('focus', (e) => {
-          if (e.target.tagName === 'SELECT') activeSelect = e.target.id;
-        }, true);
-        document.addEventListener('blur', (e) => {
-          if (e.target.tagName === 'SELECT') setTimeout(() => activeSelect = null, 100);
-        }, true);
+        function setFilter(filter) {
+          currentFilter = filter;
+          document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+          document.getElementById('tab-' + filter).classList.add('active');
+          renderTurnos();
+          renderKPIs();
+        }
         
         async function loadData() {
           try {
@@ -918,7 +949,6 @@ let activeSelect = null;
             const data = await res.json();
             allTurnos = data.turnos || [];
             
-            // Alerta sonora cuando entra camión nuevo
             const esperando = allTurnos.filter(t => t.status === 'ESPERANDO_ASIGNACION').length;
             if (esperando > prevEsperando && prevEsperando >= 0) {
               playAlert();
@@ -926,7 +956,6 @@ let activeSelect = null;
             prevEsperando = esperando;
             
             renderKPIs();
-            // No re-renderizar si están usando un select
             if (!activeSelect) {
               renderTurnos();
               renderDocks();
@@ -936,49 +965,58 @@ let activeSelect = null;
           }
         }
         
+        function getFilteredTurnos() {
+          if (currentFilter === 'TODOS') return allTurnos;
+          return allTurnos.filter(t => t.warehouse === currentFilter || (!t.warehouse && currentFilter === 'PL2'));
+        }
+        
         function renderKPIs() {
-          const enPredio = allTurnos.filter(t => t.status !== 'EGRESADO').length;
-          const atracados = allTurnos.filter(t => t.status === 'ATRACADO').length;
+          const filtered = getFilteredTurnos();
+          const enPredio = filtered.filter(t => t.status !== 'EGRESADO').length;
+          const atracados = filtered.filter(t => t.status === 'ATRACADO').length;
           document.getElementById('kpis').innerHTML = 
-            '<div class="kpi"><div class="kpi-value">' + enPredio + '</div><div class="kpi-label">En predio</div></div>' +
+            '<div class="kpi"><div class="kpi-value">' + enPredio + '</div><div class="kpi-label">En predio (' + currentFilter + ')</div></div>' +
             '<div class="kpi"><div class="kpi-value">' + atracados + '</div><div class="kpi-label">Atracados</div></div>';
         }
         
         function renderTurnos() {
-          const activos = allTurnos.filter(t => t.status !== 'EGRESADO');
+          const filtered = getFilteredTurnos();
+          const activos = filtered.filter(t => t.status !== 'EGRESADO');
+          
           if (activos.length === 0) {
-            document.getElementById('turnos').innerHTML = '<div class="card" style="text-align:center; opacity:0.6;">No hay turnos activos</div>';
+            document.getElementById('turnos').innerHTML = '<div class="card" style="text-align:center; opacity:0.6;">No hay turnos activos en ' + currentFilter + '</div>';
             return;
           }
           
           let html = '';
           activos.forEach(t => {
-            html += '<div class="turno-card" onclick="showDetail(\\'' + t.turno_id + '\\')">';
-            html += '<div class="turno-info">';
-            html += '<h3>' + t.truck + ' ' + getStatusBadge(t.status) + '</h3>';
-            html += '<p>' + t.carrier + (t.dock ? ' → ' + t.dock : '') + '</p>';
-            html += '</div>';
-            html += '<div class="turno-meta">';
-            html += '<div class="time">' + formatTime(t.ts_entrada) + '</div>';
-            html += '</div></div>';
+            const opBadge = t.operation === 'Colecta' 
+              ? '<span class="op-badge op-colecta">COLECTA</span>' 
+              : '<span class="op-badge op-descarga">DESCARGA</span>';
             
-if (t.status === 'ESPERANDO_ASIGNACION') {
-              html += '<div class="assign-row">';
-              html += '<select id="dock-' + t.turno_id + '">';
-              for (let i = 1; i <= 40; i++) {
+            html += '<div class="turno-row" onclick="showDetail(\\'' + t.turno_id + '\\')">';
+            html += '<div class="turno-info-main">';
+            html += '<h3>' + t.truck + ' ' + getStatusBadge(t.status) + ' ' + opBadge + '</h3>';
+            html += '<p>' + t.carrier + (t.trip_number ? ' • Viaje: ' + t.trip_number : '') + (t.dock ? ' • ' + t.dock : '') + '</p>';
+            html += '</div>';
+            html += '<div class="turno-actions">';
+            
+            if (t.status === 'ESPERANDO_ASIGNACION') {
+              const dockStart = t.warehouse === 'PL3' ? 21 : 1;
+              const dockEnd = t.warehouse === 'PL3' ? 40 : 20;
+              html += '<select id="dock-' + t.turno_id + '" onclick="event.stopPropagation();">';
+              for (let i = dockStart; i <= dockEnd; i++) {
                 const d = 'D-' + String(i).padStart(2, '0');
                 const ocupada = allTurnos.some(x => x.dock === d && x.status !== 'EGRESADO' && x.status !== 'DESATRACADO');
-                html += '<option value="' + d + '"' + (ocupada ? ' disabled' : '') + '>' + d + (ocupada ? ' (ocupada)' : '') + '</option>';
+                html += '<option value="' + d + '"' + (ocupada ? ' disabled' : '') + '>' + d + (ocupada ? ' (ocup)' : '') + '</option>';
               }
               html += '</select>';
               html += '<button class="btn btn-green" onclick="event.stopPropagation(); asignar(\\'' + t.turno_id + '\\')">Asignar</button>';
-              html += '</div>';
             }
             
             if (t.status === 'DESATRACADO') {
-              html += '<div class="assign-row">';
-              html += '<select id="reasign-' + t.turno_id + '">';
-              html += '<option value="">🔄 Reasignar dock (opcional)</option>';
+              html += '<select id="reasign-' + t.turno_id + '" onclick="event.stopPropagation();">';
+              html += '<option value="">🔄 Reasignar...</option>';
               for (let i = 1; i <= 40; i++) {
                 const d = 'D-' + String(i).padStart(2, '0');
                 const ocupada = allTurnos.some(x => x.dock === d && x.status !== 'EGRESADO' && x.status !== 'DESATRACADO');
@@ -986,8 +1024,10 @@ if (t.status === 'ESPERANDO_ASIGNACION') {
               }
               html += '</select>';
               html += '<button class="btn btn-orange" onclick="event.stopPropagation(); reasignar(\\'' + t.turno_id + '\\')">Reasignar</button>';
-              html += '</div>';
             }
+            
+            html += '<span class="time">' + formatTime(t.ts_entrada) + '</span>';
+            html += '</div></div>';
           });
           
           document.getElementById('turnos').innerHTML = html;
@@ -996,28 +1036,62 @@ if (t.status === 'ESPERANDO_ASIGNACION') {
         function renderDocks() {
           let html = '';
           
-          html += '<div class="warehouse"><h3>🏭 Nave 1 (D-01 a D-20)</h3><div class="dock-grid">';
+          html += '<div class="warehouse"><h3>🏭 PL2 (D-01 a D-20)</h3><div class="dock-grid">';
           for (let i = 1; i <= 20; i++) {
             const d = 'D-' + String(i).padStart(2, '0');
-            const ocupada = allTurnos.some(t => t.dock === d && t.status !== 'EGRESADO' && t.status !== 'DESATRACADO');
-            html += '<div class="dock ' + (ocupada ? 'dock-occupied' : 'dock-free') + '">' + d + '</div>';
+            const turnoEnDock = allTurnos.find(t => t.dock === d && t.status !== 'EGRESADO' && t.status !== 'DESATRACADO');
+            const ocupada = !!turnoEnDock;
+            html += '<div class="dock dock-cell ' + (ocupada ? 'dock-occupied' : 'dock-free') + '" onclick="showDockDetail(\\'' + d + '\\')">' + d + '</div>';
           }
           html += '</div></div>';
           
-          html += '<div class="warehouse"><h3>🏭 Nave 2 (D-21 a D-40)</h3><div class="dock-grid">';
+          html += '<div class="warehouse"><h3>🏭 PL3 (D-21 a D-40)</h3><div class="dock-grid">';
           for (let i = 21; i <= 40; i++) {
             const d = 'D-' + String(i).padStart(2, '0');
-            const ocupada = allTurnos.some(t => t.dock === d && t.status !== 'EGRESADO' && t.status !== 'DESATRACADO');
-            html += '<div class="dock ' + (ocupada ? 'dock-occupied' : 'dock-free') + '">' + d + '</div>';
+            const turnoEnDock = allTurnos.find(t => t.dock === d && t.status !== 'EGRESADO' && t.status !== 'DESATRACADO');
+            const ocupada = !!turnoEnDock;
+            html += '<div class="dock dock-cell ' + (ocupada ? 'dock-occupied' : 'dock-free') + '" onclick="showDockDetail(\\'' + d + '\\')">' + d + '</div>';
           }
           html += '</div></div>';
           
           document.getElementById('docks').innerHTML = html;
         }
         
+        function showDockDetail(dockId) {
+          const turno = allTurnos.find(t => t.dock === dockId && t.status !== 'EGRESADO' && t.status !== 'DESATRACADO');
+          
+          document.getElementById('modal-title').textContent = 'Dársena ' + dockId;
+          
+          let html = '';
+          if (turno) {
+            html += '<div style="text-align:center; padding: 16px 0;">';
+            html += '<div class="icon-circle icon-green" style="margin: 0 auto 16px;">🚛</div>';
+            html += '<h2 style="margin:0;">' + turno.truck + '</h2>';
+            html += '<p style="color:' + colors.muted + ';">' + turno.carrier + '</p>';
+            html += '<p>' + getStatusBadge(turno.status) + '</p>';
+            if (turno.trip_number) html += '<p>Viaje: <strong>' + turno.trip_number + '</strong></p>';
+            if (turno.operation) html += '<p>Operación: <strong>' + turno.operation + '</strong></p>';
+            html += '</div>';
+            
+            html += '<div class="timeline">';
+            html += renderTimelineItem(turno.ts_entrada, 'Ingreso');
+            html += renderTimelineItem(turno.ts_asignacion, 'Asignado a ' + dockId);
+            html += renderTimelineItem(turno.ts_atracado, 'Atracado');
+            html += '</div>';
+          } else {
+            html += '<div style="text-align:center; padding: 32px 0;">';
+            html += '<div class="icon-circle" style="margin: 0 auto 16px; background: rgba(255,255,255,0.1);">✓</div>';
+            html += '<h3 style="margin:0; color:' + colors.muted + ';">Dársena libre</h3>';
+            html += '</div>';
+          }
+          
+          document.getElementById('modal-content').innerHTML = html;
+          document.getElementById('modal').classList.add('active');
+        }
+        
         async function asignar(turnoId) {
           const dock = document.getElementById('dock-' + turnoId).value;
-          const warehouse = parseInt(dock.split('-')[1]) <= 20 ? 'Nave 1' : 'Nave 2';
+          const warehouse = parseInt(dock.split('-')[1]) <= 20 ? 'PL2' : 'PL3';
           
           try {
             const res = await fetch('/api/asignar', {
@@ -1035,13 +1109,14 @@ if (t.status === 'ESPERANDO_ASIGNACION') {
             alert('Error de conexión');
           }
         }
+        
         async function reasignar(turnoId) {
           const dock = document.getElementById('reasign-' + turnoId).value;
           if (!dock) {
             alert('Seleccioná un dock para reasignar');
             return;
           }
-          const warehouse = parseInt(dock.split('-')[1]) <= 20 ? 'Nave 1' : 'Nave 2';
+          const warehouse = parseInt(dock.split('-')[1]) <= 20 ? 'PL2' : 'PL3';
           
           try {
             const res = await fetch('/api/reasignar', {
@@ -1059,13 +1134,21 @@ if (t.status === 'ESPERANDO_ASIGNACION') {
             alert('Error de conexión');
           }
         }
+        
         function showDetail(turnoId) {
           const t = allTurnos.find(x => x.turno_id === turnoId);
           if (!t) return;
           
           document.getElementById('modal-title').textContent = t.truck;
           
-          let html = '<div class="timeline">';
+          let html = '<div style="margin-bottom:16px;">';
+          html += '<p><strong>Transportista:</strong> ' + t.carrier + '</p>';
+          if (t.trip_number) html += '<p><strong>N° Viaje:</strong> ' + t.trip_number + '</p>';
+          if (t.operation) html += '<p><strong>Operación:</strong> ' + t.operation + '</p>';
+          if (t.warehouse) html += '<p><strong>Nave:</strong> ' + t.warehouse + '</p>';
+          html += '</div>';
+          
+          html += '<div class="timeline">';
           html += renderTimelineItem(t.ts_entrada, 'Ingreso registrado');
           html += renderTimelineItem(t.ts_asignacion, 'Dársena asignada' + (t.dock ? ': ' + t.dock : ''));
           html += renderTimelineItem(t.ts_atracado, 'Atracado');
@@ -1119,7 +1202,6 @@ if (t.status === 'ESPERANDO_ASIGNACION') {
     </body></html>
   `);
 });
-
 // ==================== PÁGINA GARITA/SEGURIDAD ====================
 app.get('/garita', (req, res) => {
   res.send(`
