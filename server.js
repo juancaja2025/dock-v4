@@ -1491,3 +1491,16 @@ app.post('/api/admin/limpiar', async (req, res) => {
 app.listen(PORT, () => {
   console.log(`🚛 OCASA Dock Manager corriendo en puerto ${PORT}`);
 });
+
+
+app.get('/setup-db', async (req, res) => {
+  try {
+    await pool.query(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS trip_number VARCHAR(50)`);
+    await pool.query(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS operation VARCHAR(20)`);
+    await pool.query(`UPDATE turnos SET warehouse = 'PL2' WHERE warehouse = 'Nave 1'`);
+    await pool.query(`UPDATE turnos SET warehouse = 'PL3' WHERE warehouse = 'Nave 2'`);
+    res.send('✅ Base de datos actualizada');
+  } catch(e) {
+    res.send('❌ Error: ' + e.message);
+  }
+});
