@@ -238,9 +238,11 @@ function formatDateTime(date) {
 
 // Registrar entrada
 app.post('/api/entrada', async (req, res) => {
-  const { truck, carrier } = req.body;
+  const { truck, carrier, tripNumber, warehouse, operation } = req.body;
   if (!truck) return res.json({ success: false, error: 'Patente requerida' });
   if (!carrier) return res.json({ success: false, error: 'Seleccioná un transportista' });
+  if (!warehouse) return res.json({ success: false, error: 'Seleccioná la nave' });
+  if (!operation) return res.json({ success: false, error: 'Seleccioná el tipo de operación' });
   
   try {
     // Buscar turno activo existente
@@ -256,9 +258,9 @@ app.post('/api/entrada', async (req, res) => {
     // Crear nuevo turno
     const turnoId = await generarId();
     await pool.query(
-      `INSERT INTO turnos (turno_id, truck, carrier, type, status, ts_entrada) 
-       VALUES ($1, $2, $3, 'INBOUND', 'ESPERANDO_ASIGNACION', CURRENT_TIMESTAMP)`,
-      [turnoId, truck.toUpperCase(), carrier]
+      `INSERT INTO turnos (turno_id, truck, carrier, trip_number, warehouse, operation, type, status, ts_entrada) 
+       VALUES ($1, $2, $3, $4, $5, $6, 'INBOUND', 'ESPERANDO_ASIGNACION', CURRENT_TIMESTAMP)`,
+      [turnoId, truck.toUpperCase(), carrier, tripNumber || null, warehouse, operation]
     );
     
     res.json({ success: true, id: turnoId, existing: false });
@@ -306,18 +308,7 @@ app.post('/api/asignar', async (req, res) => {
     if (turno.rows[0].status !== 'ESPERANDO_ASIGNACION') {
       return res.json({ success: false, error: 'El turno ya tiene dársena asignada' });
     }
-    app.post('/api/reasignar', async (req, res) => {
-  const { turnoId, dock, warehouse } = req.body;
-  try {
-    await pool.query(
-      `UPDATE turnos SET dock = $1, warehouse = $2, status = 'DARSENA_ASIGNADA', ts_asignacion = NOW(), ts_atracado = NULL, ts_desatracado = NULL WHERE turno_id = $3`,
-      [dock, warehouse, turnoId]
-    );
-    res.json({ success: true });
-  } catch(e) {
-    res.json({ success: false, error: e.message });
-  }
-});
+    
     // Verificar que el dock no esté ocupado
     const dockCheck = await pool.query(
       "SELECT * FROM turnos WHERE dock = $1 AND status NOT IN ('EGRESADO', 'DESATRACADO')",
@@ -338,6 +329,30 @@ app.post('/api/asignar', async (req, res) => {
   } catch (err) {
     console.error(err);
     res.json({ success: false, error: 'Error de base de datos' });
+  }
+});
+
+// Reasignar dársena (después de desatracar)
+app.post('/api/reasignar', async (req, res) => {
+  const { turnoId, dock, warehouse } = req.body;
+  try {
+    // Verificar que el dock no esté ocupado
+    const dockCheck = await pool.query(
+      "SELECT * FROM turnos WHERE dock = $1 AND status NOT IN ('EGRESADO', 'DESATRACADO')",
+      [dock]
+    );
+    
+    if (dockCheck.rows.length > 0) {
+      return res.json({ success: false, error: 'Esa dársena ya está ocupada' });
+    }
+    
+    await pool.query(
+      `UPDATE turnos SET dock = $1, warehouse = $2, status = 'DARSENA_ASIGNADA', ts_asignacion = CURRENT_TIMESTAMP, ts_atracado = NULL, ts_desatracado = NULL WHERE turno_id = $3`,
+      [dock, warehouse, turnoId]
+    );
+    res.json({ success: true });
+  } catch(e) {
+    res.json({ success: false, error: e.message });
   }
 });
 
@@ -447,8 +462,9 @@ app.get('/entrada', (req, res) => {
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
       <title>Entrada - OCASA Dock Manager</title>
       <style>${styles}
-        #carrier { padding: 16px; font-size: 18px; min-height: 56px; }
+        select, input[type="text"] { padding: 16px; font-size: 18px; min-height: 56px; }
         label { display: block; text-align: left; color: ${colors.muted}; font-size: 14px; margin-bottom: 4px; margin-top: 12px; font-weight: 600; }
+        .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
       </style>
     </head><body>
       <div class="container" style="text-align: center; padding-top: 40px;">
@@ -461,19 +477,47 @@ app.get('/entrada', (req, res) => {
         <div id="success" class="success" style="display:none;"></div>
         
         <div class="card">
-          <label>PATENTE</label>
+          <label>PATENTE *</label>
           <input type="text" id="truck" placeholder="Ej: AA-123-BB" maxlength="10"
                  style="text-transform: uppercase; font-family: monospace; font-size: 24px; text-align: center;">
           
-          <label>TRANSPORTISTA</label>
+          <label>TRANSPORTISTA *</label>
           <select id="carrier">
             <option value="" disabled selected>Seleccioná transportista...</option>
             ${carrierOptions}
           </select>
           
-          <button class="btn btn-primary" onclick="registrar()" id="btnSubmit">
+          <label>N° DE VIAJE (opcional)</label>
+          <input type="text" id="tripNumber" placeholder="Ej: 123456" maxlength="20">
+          
+          <div class="row-2">
+            <div>
+              <label>DESTINO *</label>
+              <select id="warehouse">
+                <option value="" disabled selected>Nave...</option>
+                <option value="PL2">PL2</option>
+                <option value="PL3">PL3</option>
+              </select>
+            </div>
+            <div>
+              <label>OPERACIÓN *</label>
+              <select id="operation">
+                <option value="" disabled selected>Tipo...</option>
+                <option value="Descarga">Descarga</option>
+                <option value="Colecta">Colecta</option>
+              </select>
+            </div>
+          </div>
+          
+          <button class="btn btn-primary" onclick="registrar()" id="btnSubmit" style="margin-top: 16px;">
             🚛 Registrar Ingreso
           </button>
+        </div>
+        
+        <div class="card" style="background: rgba(255,193,7,0.15); border: 1px solid rgba(255,193,7,0.4); margin-top: 16px;">
+          <p style="margin: 0; font-weight: 600; color: #ffc107;">⚠️ PUNTOS A TENER EN CUENTA</p>
+          <p style="margin: 8px 0 0 0; font-size: 14px; color: #efefef;">• Usar <strong>zapatos de seguridad</strong></p>
+          <p style="margin: 4px 0 0 0; font-size: 14px; color: #efefef;">• Usar <strong>chaleco reflectivo</strong></p>
         </div>
       </div>
       
@@ -486,8 +530,14 @@ app.get('/entrada', (req, res) => {
         async function registrar() {
           const truck = document.getElementById('truck').value.trim();
           const carrier = document.getElementById('carrier').value;
+          const tripNumber = document.getElementById('tripNumber').value.trim();
+          const warehouse = document.getElementById('warehouse').value;
+          const operation = document.getElementById('operation').value;
+          
           if (!truck) { showError('Ingresá tu patente'); return; }
           if (!carrier) { showError('Seleccioná un transportista'); return; }
+          if (!warehouse) { showError('Seleccioná la nave de destino'); return; }
+          if (!operation) { showError('Seleccioná el tipo de operación'); return; }
           
           document.getElementById('btnSubmit').disabled = true;
           document.getElementById('btnSubmit').innerHTML = '⏳ Procesando...';
@@ -496,7 +546,7 @@ app.get('/entrada', (req, res) => {
             const res = await fetch('/api/entrada', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ truck, carrier })
+              body: JSON.stringify({ truck, carrier, tripNumber, warehouse, operation })
             });
             const data = await res.json();
             
