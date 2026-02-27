@@ -1002,8 +1002,8 @@ app.get('/operador', (req, res) => {
             html += '<div class="turno-actions">';
             
             if (t.status === 'ESPERANDO_ASIGNACION') {
-              const dockStart = t.warehouse === 'PL3' ? 21 : 1;
-              const dockEnd = t.warehouse === 'PL3' ? 40 : 20;
+              const dockStart = t.warehouse === 'PL3' ? 22 : 1;
+              const dockEnd = t.warehouse === 'PL3' ? 40 : 21;
               html += '<select id="dock-' + t.turno_id + '" onclick="event.stopPropagation();">';
               for (let i = dockStart; i <= dockEnd; i++) {
                 const d = 'D-' + String(i).padStart(2, '0');
@@ -1036,8 +1036,8 @@ app.get('/operador', (req, res) => {
         function renderDocks() {
           let html = '';
           
-          html += '<div class="warehouse"><h3>🏭 PL2 (D-01 a D-20)</h3><div class="dock-grid">';
-          for (let i = 1; i <= 20; i++) {
+          html += '<div class="warehouse"><h3>🏭 PL2 (D-01 a D-21)</h3><div class="dock-grid">';
+          for (let i = 1; i <= 21; i++) {
             const d = 'D-' + String(i).padStart(2, '0');
             const turnoEnDock = allTurnos.find(t => t.dock === d && t.status !== 'EGRESADO' && t.status !== 'DESATRACADO');
             const ocupada = !!turnoEnDock;
@@ -1045,8 +1045,8 @@ app.get('/operador', (req, res) => {
           }
           html += '</div></div>';
           
-          html += '<div class="warehouse"><h3>🏭 PL3 (D-21 a D-40)</h3><div class="dock-grid">';
-          for (let i = 21; i <= 40; i++) {
+          html += '<div class="warehouse"><h3>🏭 PL3 (D-22 a D-40)</h3><div class="dock-grid">';
+          for (let i = 22; i <= 40; i++) {
             const d = 'D-' + String(i).padStart(2, '0');
             const turnoEnDock = allTurnos.find(t => t.dock === d && t.status !== 'EGRESADO' && t.status !== 'DESATRACADO');
             const ocupada = !!turnoEnDock;
