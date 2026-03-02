@@ -465,13 +465,36 @@ app.get('/entrada', (req, res) => {
         select, input[type="text"] { padding: 16px; font-size: 18px; min-height: 56px; }
         label { display: block; text-align: left; color: ${colors.muted}; font-size: 14px; margin-bottom: 4px; margin-top: 12px; font-weight: 600; }
         .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+        .video-container { position: relative; width: 100%; padding-bottom: 56.25%; margin: 16px 0; border-radius: 12px; overflow: hidden; }
+        .video-container iframe { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; }
+        .induccion { background: rgba(0,153,168,0.1); border: 1px solid ${colors.primary}; border-radius: 12px; padding: 16px; margin-bottom: 20px; text-align: left; }
+        .induccion h3 { margin: 0 0 12px 0; color: ${colors.primary}; }
+        .induccion ul { margin: 0; padding-left: 20px; }
+        .induccion li { margin-bottom: 8px; font-size: 14px; color: ${colors.light}; }
+        .induccion strong { color: ${colors.accent}; }
       </style>
     </head><body>
       <div class="container" style="text-align: center; padding-top: 40px;">
         <img src="${logoSrc}" alt="OCASA" class="logo-large">
         <div class="icon-circle icon-primary">🚛</div>
         <h1>Registro de Ingreso</h1>
-        <p class="subtitle">Completá los datos para registrarte</p>
+        <p class="subtitle">Mirá el video y completá los datos</p>
+        
+        <div class="induccion">
+          <h3>📋 Antes de empezar, mirá este video:</h3>
+          <div class="video-container">
+            <iframe src="https://drive.google.com/file/d/10wY5huXmtAHToymtkXURu54lB_Subpxh/preview" allow="autoplay"></iframe>
+          </div>
+          
+          <h3>📌 Puntos importantes:</h3>
+          <ul>
+            <li>El <strong>número de viaje es opcional</strong>, pero si lo tenés, ingresalo.</li>
+            <li>Si <strong>no sabés a qué nave ir</strong> (PL2 o PL3), consultá con la guardia.</li>
+            <li><strong>NO cierres esta página</strong> después de registrarte. Podés minimizarla.</li>
+            <li><strong>Todas las instrucciones</strong> (a qué dársena ir, cuándo atracar) te llegan por acá.</li>
+            <li>Usá <strong>zapatos de seguridad</strong> y <strong>chaleco reflectivo</strong> en todo momento.</li>
+          </ul>
+        </div>
         
         <div id="error" class="error" style="display:none;"></div>
         <div id="success" class="success" style="display:none;"></div>
@@ -512,12 +535,6 @@ app.get('/entrada', (req, res) => {
           <button class="btn btn-primary" onclick="registrar()" id="btnSubmit" style="margin-top: 16px;">
             🚛 Registrar Ingreso
           </button>
-        </div>
-        
-        <div class="card" style="background: rgba(255,193,7,0.15); border: 1px solid rgba(255,193,7,0.4); margin-top: 16px;">
-          <p style="margin: 0; font-weight: 600; color: #ffc107;">⚠️ PUNTOS A TENER EN CUENTA</p>
-          <p style="margin: 8px 0 0 0; font-size: 14px; color: #efefef;">• Usar <strong>zapatos de seguridad</strong></p>
-          <p style="margin: 4px 0 0 0; font-size: 14px; color: #efefef;">• Usar <strong>chaleco reflectivo</strong></p>
         </div>
       </div>
       
@@ -1393,18 +1410,60 @@ app.get('/garita', (req, res) => {
   `);
 });
 // ==================== PÁGINA ADMIN (OCULTA) ====================
+// ==================== PÁGINA ADMIN (OCULTA) ====================
 app.get('/admin', (req, res) => {
+  const carriers = [
+    "Acaricia Transporte Logan","Adrian Servicio","Alfa Omega","Americantec","Andesmar","Andreani","Apicol","ASPELEYTER","Avaltrans","AYG Trucks",
+    "Bahia SRL","Balboa","Bataglia","Beira Mar","Bessone","Better Catering","Biopak","BL Puerto y Logística","Blanca Luna","Brouclean","Bulonera Central","Bulonera Pacheco",
+    "Camila Duarte","Cantarini","CASA Thames","CBC Group","CFA Fumigación","Ciari","Cimes","CISA","CLSA","Comercial Ñandubay","Container Leasing","CORREO Urbano","Cruz del Sur","CST Transporte",
+    "DATULI","Del Valle","DHL","Don Antonio","Don Gumer","DPD","Duro",
+    "Enviopack","EPSA","Erbas","EURO Packaging","Expreso Oro Negro",
+    "Failde","FAILE","Flecha Lok","FM Transporte","FRATI","Fravega","FIS Logística",
+    "Gabcin","Gentile","Grabet","Grasso","Grupo GLI","Grupo Luro","Grupo Silco","Guevara Fletes",
+    "HDL Transporte","HECA","HFL","HIMP A","Hornero",
+    "IAFRATELLI","IFLOW","Impresur","Internavegación","INTERMEDIO","Id Group",
+    "Joaquin","JM Yaya e Hijos","Juarez",
+    "La Sevillanita","La Tablada","LEO Trucks","Lir","Loginter","Logística del Valle","Logística Giménez","Logística Integral Romano","Logística Soria","Logitech","Lomas del Mirador","LTN","Luisito","Lugone","Ludamany",
+    "Marra e Hijos","Marino","MARIANO","Maringa","MAV","Meli (Mercado Libre)","MICHELIN (Mantenimiento)","Mirtrans","Moova","Moreiro","Multarys Traslados",
+    "Nahuel Remolques","Navarro","NB Cargo","Newsan","Nieva","Norlog","Norte",
+    "OCA","OCASA","Oliveri Transporte","Onetrade","Oro Negro","Oriente Elevadores",
+    "Pabile","Paganini","PANGEA","Parra","Pavile","PEF","PLK Group","Promei","Provenzano","PYTEL",
+    "QX",
+    "Ragazzi","Reyna Isabel","Romano","Ruta 21 DPD",
+    "Saff","Sainz","SERVINTAR","SERVITRAN","SIARI","Sipe","Spineta","STC","SUMAR Servicio Industrial",
+    "Técnica Lift","Techin","TGC Autoelevadores","Thames","Toledo","Transporte del Valle","Transporte Grasso","Transporte Juarez","Transporte Norte","Transporte Trejo","Tronador",
+    "Unibrick","Unión Logística","Unitrans","Urbano Logística",
+    "Vega","VOLKOV","Vento",
+    "Webpack","WBL",
+    "Otros"
+  ];
+  const carrierOptions = carriers.map(c => `<option value="${c}">${c}</option>`).join('');
+  
   res.send(`
     <!DOCTYPE html>
     <html><head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
       <title>Admin - OCASA Dock Manager</title>
-      <style>${styles}</style>
+      <style>${styles}
+        .turno-admin { background: rgba(255,255,255,0.05); border-radius: 8px; padding: 12px; margin-bottom: 8px; }
+        .turno-admin-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+        .turno-admin-header h3 { margin: 0; }
+        .turno-admin-actions { display: flex; gap: 8px; }
+        .turno-admin-actions button { padding: 6px 12px; font-size: 12px; }
+        .edit-form { display: none; margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.1); }
+        .edit-form.active { display: block; }
+        .edit-form label { display: block; font-size: 12px; color: ${colors.muted}; margin: 8px 0 4px; }
+        .edit-form input, .edit-form select { width: 100%; padding: 8px; font-size: 14px; margin-bottom: 4px; }
+        .edit-form .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+        .btn-delete { background: #dc3545 !important; }
+        .btn-edit { background: #ffc107 !important; color: #000 !important; }
+        .btn-save { background: #28a745 !important; }
+      </style>
     </head><body>
-      <div class="container">
+      <div class="container-wide">
         <img src="${logoSrc}" alt="OCASA" class="logo">
-        <h1>🔐 Administración</h1>
+        <h1>🔐 Panel de Administración</h1>
         
         <div id="login" class="card">
           <input type="password" id="pass" placeholder="Contraseña" style="width:100%; padding:16px; font-size:18px; border-radius:8px; border:none; margin-bottom:12px;">
@@ -1413,47 +1472,148 @@ app.get('/admin', (req, res) => {
         
         <div id="panel" style="display:none;">
           <div class="card">
-            <h2 style="margin-top:0;">Limpiar Base de Datos</h2>
-            <button onclick="borrar('egresados')" style="width:100%; background:#ffc107; margin-bottom:12px;">🧹 Borrar turnos finalizados</button>
-            <button onclick="borrar('viejos')" style="width:100%; background:#ff9800; margin-bottom:12px;">📅 Borrar turnos +7 días</button>
-            <button onclick="borrar('todos')" style="width:100%; background:#dc3545;">🗑️ Borrar TODOS los turnos</button>
+            <h2 style="margin-top:0;">🧹 Limpiar Base de Datos</h2>
+            <button onclick="limpiar('egresados')" style="width:100%; background:#ffc107; color:#000; margin-bottom:8px;">Borrar turnos finalizados</button>
+            <button onclick="limpiar('viejos')" style="width:100%; background:#ff9800; margin-bottom:8px;">Borrar turnos +7 días</button>
+            <button onclick="limpiar('todos')" style="width:100%; background:#dc3545;">⚠️ Borrar TODOS</button>
           </div>
-          <div id="resultado" class="card" style="display:none; margin-top:16px;"></div>
+          
+          <h2 style="margin-top:24px;">📋 Gestión de Turnos</h2>
+          <div id="turnos-admin"></div>
         </div>
       </div>
       
       <script>
+        const PASS = 'Newsanpilar2026';
+        const carrierOptions = \`${carrierOptions}\`;
+        let allTurnos = [];
+        
         function login() {
-          const pass = document.getElementById('pass').value;
-          if (pass === 'Newsanpilar2026') {
+          if (document.getElementById('pass').value === PASS) {
             document.getElementById('login').style.display = 'none';
             document.getElementById('panel').style.display = 'block';
+            loadTurnos();
           } else {
             alert('Contraseña incorrecta');
           }
         }
         
-        async function borrar(tipo) {
-          const msgs = {
-            'egresados': '¿Borrar todos los turnos FINALIZADOS?',
-            'viejos': '¿Borrar turnos de hace más de 7 días?',
-            'todos': '⚠️ ¿BORRAR TODOS LOS TURNOS? Esta acción no se puede deshacer.'
+        async function loadTurnos() {
+          const res = await fetch('/api/turnos');
+          const data = await res.json();
+          allTurnos = data.turnos || [];
+          renderTurnos();
+        }
+        
+        function renderTurnos() {
+          const activos = allTurnos.filter(t => t.status !== 'EGRESADO');
+          if (activos.length === 0) {
+            document.getElementById('turnos-admin').innerHTML = '<div class="card" style="text-align:center; opacity:0.6;">No hay turnos activos</div>';
+            return;
+          }
+          
+          let html = '';
+          activos.forEach(t => {
+            html += '<div class="turno-admin" id="turno-' + t.turno_id + '">';
+            html += '<div class="turno-admin-header">';
+            html += '<h3>' + t.truck + ' <span class="badge badge-primary">' + t.status + '</span></h3>';
+            html += '<div class="turno-admin-actions">';
+            html += '<button class="btn btn-edit" onclick="toggleEdit(\\'' + t.turno_id + '\\')">✏️ Editar</button>';
+            html += '<button class="btn btn-delete" onclick="eliminar(\\'' + t.turno_id + '\\')">🗑️ Eliminar</button>';
+            html += '</div></div>';
+            html += '<p style="margin:0; font-size:13px; color:#aaa;">' + t.carrier + (t.trip_number ? ' • Viaje: ' + t.trip_number : '') + ' • ' + (t.warehouse || 'Sin nave') + ' • ' + (t.operation || 'Sin op') + (t.dock ? ' • ' + t.dock : '') + '</p>';
+            
+            html += '<div class="edit-form" id="edit-' + t.turno_id + '">';
+            html += '<div class="row-2">';
+            html += '<div><label>Patente</label><input type="text" id="truck-' + t.turno_id + '" value="' + t.truck + '"></div>';
+            html += '<div><label>N° Viaje</label><input type="text" id="trip-' + t.turno_id + '" value="' + (t.trip_number || '') + '"></div>';
+            html += '</div>';
+            html += '<label>Transportista</label><select id="carrier-' + t.turno_id + '"><option value="">Seleccionar...</option>' + carrierOptions + '</select>';
+            html += '<div class="row-2">';
+            html += '<div><label>Nave</label><select id="warehouse-' + t.turno_id + '"><option value="PL2"' + (t.warehouse === 'PL2' ? ' selected' : '') + '>PL2</option><option value="PL3"' + (t.warehouse === 'PL3' ? ' selected' : '') + '>PL3</option></select></div>';
+            html += '<div><label>Operación</label><select id="operation-' + t.turno_id + '"><option value="Descarga"' + (t.operation === 'Descarga' ? ' selected' : '') + '>Descarga</option><option value="Colecta"' + (t.operation === 'Colecta' ? ' selected' : '') + '>Colecta</option></select></div>';
+            html += '</div>';
+            html += '<label>Dársena</label><select id="dock-' + t.turno_id + '"><option value="">Sin asignar</option>';
+            for (let i = 1; i <= 40; i++) {
+              const d = 'D-' + String(i).padStart(2, '0');
+              html += '<option value="' + d + '"' + (t.dock === d ? ' selected' : '') + '>' + d + '</option>';
+            }
+            html += '</select>';
+            html += '<button class="btn btn-save" onclick="guardar(\\'' + t.turno_id + '\\')" style="width:100%; margin-top:12px;">💾 Guardar cambios</button>';
+            html += '</div></div>';
+          });
+          
+          document.getElementById('turnos-admin').innerHTML = html;
+          
+          // Set carrier values after render
+          activos.forEach(t => {
+            const sel = document.getElementById('carrier-' + t.turno_id);
+            if (sel && t.carrier) sel.value = t.carrier;
+          });
+        }
+        
+        function toggleEdit(id) {
+          document.getElementById('edit-' + id).classList.toggle('active');
+        }
+        
+        async function eliminar(id) {
+          if (!confirm('¿Eliminar este turno?')) return;
+          const res = await fetch('/api/admin/eliminar', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ turnoId: id, pass: PASS })
+          });
+          const data = await res.json();
+          if (data.success) {
+            loadTurnos();
+          } else {
+            alert(data.error);
+          }
+        }
+        
+        async function guardar(id) {
+          const turno = {
+            turnoId: id,
+            truck: document.getElementById('truck-' + id).value,
+            carrier: document.getElementById('carrier-' + id).value,
+            tripNumber: document.getElementById('trip-' + id).value,
+            warehouse: document.getElementById('warehouse-' + id).value,
+            operation: document.getElementById('operation-' + id).value,
+            dock: document.getElementById('dock-' + id).value,
+            pass: PASS
           };
           
+          const res = await fetch('/api/admin/editar', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(turno)
+          });
+          const data = await res.json();
+          if (data.success) {
+            alert('✅ Guardado');
+            loadTurnos();
+          } else {
+            alert(data.error);
+          }
+        }
+        
+        async function limpiar(tipo) {
+          const msgs = {
+            'egresados': '¿Borrar turnos FINALIZADOS?',
+            'viejos': '¿Borrar turnos +7 días?',
+            'todos': '⚠️ ¿BORRAR TODO?'
+          };
           if (!confirm(msgs[tipo])) return;
-          if (tipo === 'todos' && !confirm('¿Estás SEGURO? Se perderán todos los datos.')) return;
+          if (tipo === 'todos' && !confirm('¿SEGURO? No se puede deshacer.')) return;
           
           const res = await fetch('/api/admin/limpiar', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ tipo, pass: 'Newsanpilar2026' })
+            body: JSON.stringify({ tipo, pass: PASS })
           });
           const data = await res.json();
-          
-          document.getElementById('resultado').style.display = 'block';
-          document.getElementById('resultado').innerHTML = data.success 
-            ? '<p style="color:#8fbf4c;">✅ ' + data.mensaje + '</p>'
-            : '<p style="color:#dc3545;">❌ ' + data.error + '</p>';
+          alert(data.success ? '✅ ' + data.mensaje : '❌ ' + data.error);
+          loadTurnos();
         }
       </script>
     </body></html>
@@ -1462,10 +1622,7 @@ app.get('/admin', (req, res) => {
 
 app.post('/api/admin/limpiar', async (req, res) => {
   const { tipo, pass } = req.body;
-  
-  if (pass !== 'Newsanpilar2026') {
-    return res.json({ success: false, error: 'No autorizado' });
-  }
+  if (pass !== 'Newsanpilar2026') return res.json({ success: false, error: 'No autorizado' });
   
   try {
     let result;
@@ -1482,7 +1639,34 @@ app.post('/api/admin/limpiar', async (req, res) => {
       default:
         return res.json({ success: false, error: 'Tipo inválido' });
     }
-    res.json({ success: true, mensaje: `${result.rowCount} turnos eliminados` });
+    res.json({ success: true, mensaje: result.rowCount + ' turnos eliminados' });
+  } catch(e) {
+    res.json({ success: false, error: e.message });
+  }
+});
+
+app.post('/api/admin/eliminar', async (req, res) => {
+  const { turnoId, pass } = req.body;
+  if (pass !== 'Newsanpilar2026') return res.json({ success: false, error: 'No autorizado' });
+  
+  try {
+    await pool.query('DELETE FROM turnos WHERE turno_id = $1', [turnoId]);
+    res.json({ success: true });
+  } catch(e) {
+    res.json({ success: false, error: e.message });
+  }
+});
+
+app.post('/api/admin/editar', async (req, res) => {
+  const { turnoId, truck, carrier, tripNumber, warehouse, operation, dock, pass } = req.body;
+  if (pass !== 'Newsanpilar2026') return res.json({ success: false, error: 'No autorizado' });
+  
+  try {
+    await pool.query(
+      `UPDATE turnos SET truck = $1, carrier = $2, trip_number = $3, warehouse = $4, operation = $5, dock = $6 WHERE turno_id = $7`,
+      [truck.toUpperCase(), carrier, tripNumber || null, warehouse, operation, dock || null, turnoId]
+    );
+    res.json({ success: true });
   } catch(e) {
     res.json({ success: false, error: e.message });
   }
