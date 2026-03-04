@@ -266,7 +266,7 @@ app.post('/api/entrada', async (req, res) => {
     res.json({ success: true, id: turnoId, existing: false });
   } catch (err) {
     console.error(err);
-    res.json({ success: false, error: 'Error de base de datos' });
+    res.json({ success: false, error: err.message });
   }
 });
 
