@@ -1689,3 +1689,29 @@ app.get('/setup-db', async (req, res) => {
   }
 });
 
+//DEBUG//
+
+app.get('/test-db', async (req, res) => {
+  try {
+    // Test conexión
+    const test = await pool.query('SELECT NOW()');
+    
+    // Ver columnas de la tabla
+    const cols = await pool.query(`SELECT column_name FROM information_schema.columns WHERE table_name = 'turnos'`);
+    
+    // Intentar insertar
+    const turnoId = 'TEST-' + Date.now();
+    await pool.query(
+      `INSERT INTO turnos (turno_id, truck, carrier, trip_number, warehouse, operation, type, status, ts_entrada) 
+       VALUES ($1, $2, $3, $4, $5, $6, 'INBOUND', 'ESPERANDO_ASIGNACION', CURRENT_TIMESTAMP)`,
+      [turnoId, 'TEST123', 'Test Carrier', null, 'PL2', 'Descarga']
+    );
+    
+    // Borrar el test
+    await pool.query('DELETE FROM turnos WHERE turno_id = $1', [turnoId]);
+    
+    res.send('<pre>✅ Todo OK\n\nColumnas: ' + cols.rows.map(r => r.column_name).join(', ') + '</pre>');
+  } catch(e) {
+    res.send('<pre>❌ Error: ' + e.message + '\n\nStack: ' + e.stack + '</pre>');
+  }
+});
