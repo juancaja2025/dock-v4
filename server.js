@@ -216,9 +216,13 @@ const styles = `
 
 // ===================== FUNCIONES HELPER =====================
 async function generarId() {
-  const result = await pool.query('SELECT COUNT(*) FROM turnos');
-  const count = parseInt(result.rows[0].count) + 1;
-  return 'TRN-' + String(count).padStart(4, '0');
+  const result = await pool.query("SELECT turno_id FROM turnos ORDER BY id DESC LIMIT 1");
+  if (result.rows.length === 0) {
+    return 'TRN-0001';
+  }
+  const lastId = result.rows[0].turno_id;
+  const num = parseInt(lastId.split('-')[1]) + 1;
+  return 'TRN-' + String(num).padStart(4, '0');
 }
 
 function formatTime(date) {
