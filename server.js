@@ -1688,3 +1688,12 @@ app.get('/setup-db', async (req, res) => {
     res.send('❌ Error: ' + e.message);
   }
 });
+app.get('/setup-db2', async (req, res) => {
+  try {
+    await pool.query(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS trip_number VARCHAR(50)`);
+    await pool.query(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS operation VARCHAR(20)`);
+    res.send('✅ Columnas agregadas correctamente');
+  } catch(e) {
+    res.send('❌ Error: ' + e.message);
+  }
+});
