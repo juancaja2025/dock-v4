@@ -10,8 +10,12 @@ app.use('/public', express.static(path.join(__dirname, 'public')));
 
 // ===================== BASE DE DATOS POSTGRESQL =====================
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
+  connectionString: process.env.DATABASE_URL || 'postgresql://localhost:5432/dock',
   ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false
+});
+
+pool.on('error', (err) => {
+  console.error('⚠️ DB pool error (ignorado):', err.message);
 });
 
 // Inicializar tabla
@@ -42,17 +46,30 @@ async function initDB() {
 
 initDB();
 
-// ===================== COLORES OCASA =====================
+// ===================== COLORES OCASA (Manual de marca) =====================
 const colors = {
-  primary: '#0099A8',
-  primaryDark: '#056572',
-  green: '#8fbf4c',
-  orange: '#ffab40',
-  light: '#efefef',
+  primary: '#0099A8',      // CALYPSO - color central
+  primaryDark: '#056572',  // Teal oscuro - secundario (max 5%)
+  primaryLight: 'rgba(0,153,168,0.08)',
+  primaryMedium: 'rgba(0,153,168,0.15)',
+  green: '#8fbf4c',        // Verde - secundario (max 5%)
+  orange: '#ffab40',       // Naranja - secundario (max 5%)
+  light: '#efefef',        // Gris claro
   dark: '#1a1a2e',
   darkBlue: '#16213e',
   white: '#ffffff',
-  black: '#000000'
+  black: '#000000',
+  // Tema claro (alineado a manual: CALYPSO + blanco + negro)
+  bg: '#f5f7fa',
+  bgCard: '#ffffff',
+  bgCardHover: '#f0f9fa',
+  textPrimary: '#1a1a2e',
+  textSecondary: '#5a6478',
+  textMuted: '#8c95a6',
+  border: '#e2e8f0',
+  borderLight: '#f0f0f0',
+  shadow: 'rgba(0,0,0,0.06)',
+  shadowHover: 'rgba(0,153,168,0.12)',
 };
 
 // ===================== LOGO BASE64 =====================
@@ -68,149 +85,174 @@ try {
 }
 
 // ===================== ESTILOS CSS COMPARTIDOS =====================
+// Google Fonts link para incluir en cada página
+const fontLink = '<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700&display=swap" rel="stylesheet">';
+
 const styles = `
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { 
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    background: linear-gradient(135deg, ${colors.dark} 0%, ${colors.darkBlue} 100%);
+  body {
+    font-family: 'Montserrat', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: ${colors.bg};
     min-height: 100vh;
-    color: ${colors.white};
+    color: ${colors.textPrimary};
   }
   .container { max-width: 500px; margin: 0 auto; padding: 20px; }
-  .container-wide { max-width: 900px; margin: 0 auto; padding: 20px; }
+  .container-wide { max-width: 960px; margin: 0 auto; padding: 20px; }
   .logo { height: 40px; margin-bottom: 16px; }
   .logo-large { height: 60px; margin-bottom: 24px; }
-  h1 { font-size: 24px; margin-bottom: 8px; color: ${colors.white}; }
-  h2 { font-size: 20px; margin-bottom: 12px; color: ${colors.light}; }
-  .subtitle { color: ${colors.light}; margin-bottom: 24px; opacity: 0.8; }
-  .card { 
-    background: rgba(255,255,255,0.08); 
-    border-radius: 16px; 
-    padding: 20px; 
+  h1 { font-size: 24px; margin-bottom: 8px; color: ${colors.textPrimary}; font-weight: 700; }
+  h2 { font-size: 20px; margin-bottom: 12px; color: ${colors.textPrimary}; font-weight: 600; }
+  .subtitle { color: ${colors.textSecondary}; margin-bottom: 24px; }
+  .card {
+    background: ${colors.bgCard};
+    border-radius: 16px;
+    padding: 20px;
     margin-bottom: 16px;
-    border: 1px solid rgba(255,255,255,0.1);
+    border: 1px solid ${colors.border};
+    box-shadow: 0 1px 3px ${colors.shadow};
   }
-  .btn { 
-    display: block; width: 100%; padding: 16px; border: none; border-radius: 12px; 
+  .btn {
+    display: block; width: 100%; padding: 16px; border: none; border-radius: 12px;
+    font-family: 'Montserrat', sans-serif;
     font-size: 16px; font-weight: 600; cursor: pointer; margin-top: 12px;
-    transition: transform 0.2s, opacity 0.2s;
+    transition: transform 0.2s, box-shadow 0.2s;
     text-decoration: none; text-align: center;
   }
-  .btn:hover { transform: scale(1.02); opacity: 0.9; }
-  .btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
-  .btn-primary { background: linear-gradient(135deg, ${colors.primary} 0%, ${colors.primaryDark} 100%); color: white; }
-  .btn-green { background: linear-gradient(135deg, ${colors.green} 0%, #6d9e2e 100%); color: white; }
-  .btn-orange { background: linear-gradient(135deg, ${colors.orange} 0%, #e6952e 100%); color: white; }
-  input, select { 
-    width: 100%; padding: 16px; border: 2px solid rgba(255,255,255,0.1); 
-    border-radius: 12px; font-size: 18px; background: rgba(255,255,255,0.05); 
-    color: white; margin-bottom: 8px; min-height: 52px;
+  .btn:hover { transform: translateY(-1px); box-shadow: 0 4px 12px ${colors.shadowHover}; }
+  .btn:active { transform: translateY(0); }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; box-shadow: none; }
+  .btn-primary { background: ${colors.primary}; color: white; }
+  .btn-primary:hover { background: ${colors.primaryDark}; }
+  .btn-green { background: ${colors.green}; color: white; }
+  .btn-orange { background: ${colors.orange}; color: ${colors.textPrimary}; }
+  input, select {
+    width: 100%; padding: 16px; border: 2px solid ${colors.border};
+    border-radius: 12px; font-size: 16px; font-family: 'Montserrat', sans-serif;
+    background: ${colors.bgCard};
+    color: ${colors.textPrimary}; margin-bottom: 8px; min-height: 52px;
+    transition: border-color 0.2s, box-shadow 0.2s;
   }
-  input::placeholder { color: rgba(255,255,255,0.5); }
-  input:focus, select:focus { outline: none; border-color: ${colors.primary}; }
-  select option { background: ${colors.dark}; color: white; padding: 12px; font-size: 16px; }
-  select option:disabled { color: rgba(255,255,255,0.4); }
-  .error { background: rgba(239,68,68,0.2); color: #fca5a5; padding: 12px; border-radius: 8px; margin-bottom: 16px; }
-  .success { background: rgba(143,191,76,0.2); color: ${colors.green}; padding: 12px; border-radius: 8px; margin-bottom: 16px; }
-  .icon-circle { 
-    width: 80px; height: 80px; border-radius: 50%; 
-    display: flex; align-items: center; justify-content: center; 
+  input::placeholder { color: ${colors.textMuted}; }
+  input:focus, select:focus { outline: none; border-color: ${colors.primary}; box-shadow: 0 0 0 3px rgba(0,153,168,0.12); }
+  select option { background: ${colors.bgCard}; color: ${colors.textPrimary}; padding: 12px; font-size: 16px; }
+  select option:disabled { color: ${colors.textMuted}; }
+  .error { background: #fef2f2; color: #dc2626; padding: 12px; border-radius: 8px; margin-bottom: 16px; border: 1px solid #fecaca; font-weight: 500; }
+  .success { background: #f0fdf4; color: #16a34a; padding: 12px; border-radius: 8px; margin-bottom: 16px; border: 1px solid #bbf7d0; font-weight: 500; }
+  .icon-circle {
+    width: 80px; height: 80px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
     font-size: 40px; margin: 0 auto 16px;
   }
-  .icon-primary { background: rgba(0,153,168,0.2); }
-  .icon-green { background: rgba(143,191,76,0.2); }
-  .icon-orange { background: rgba(255,171,64,0.2); }
-  .badge { 
-    display: inline-block; padding: 4px 12px; border-radius: 20px; 
-    font-size: 12px; font-weight: 600; margin-left: 8px;
+  .icon-primary { background: ${colors.primaryLight}; }
+  .icon-green { background: rgba(143,191,76,0.12); }
+  .icon-orange { background: rgba(255,171,64,0.12); }
+  .badge {
+    display: inline-block; padding: 4px 12px; border-radius: 20px;
+    font-size: 11px; font-weight: 600; margin-left: 8px; letter-spacing: 0.3px;
   }
-  .badge-yellow { background: rgba(255,171,64,0.2); color: ${colors.orange}; }
-  .badge-primary { background: rgba(0,153,168,0.2); color: ${colors.primary}; }
-  .badge-green { background: rgba(143,191,76,0.2); color: ${colors.green}; }
-  .badge-orange { background: rgba(255,171,64,0.2); color: ${colors.orange}; }
-  .badge-dark { background: rgba(5,101,114,0.3); color: ${colors.light}; }
-  .turno-card { 
-    background: rgba(255,255,255,0.05); border-radius: 12px; 
-    padding: 16px; margin-bottom: 12px; 
+  .badge-yellow { background: #fffbeb; color: #d97706; border: 1px solid #fde68a; }
+  .badge-primary { background: rgba(0,153,168,0.08); color: ${colors.primary}; border: 1px solid rgba(0,153,168,0.2); }
+  .badge-green { background: #f0fdf4; color: #16a34a; border: 1px solid #bbf7d0; }
+  .badge-orange { background: #fffbeb; color: #d97706; border: 1px solid #fde68a; }
+  .badge-dark { background: ${colors.light}; color: ${colors.textSecondary}; border: 1px solid ${colors.border}; }
+  .turno-card {
+    background: ${colors.bgCard}; border-radius: 12px;
+    padding: 16px; margin-bottom: 12px;
     display: flex; justify-content: space-between; align-items: center;
-    cursor: pointer; transition: background 0.2s;
-    border: 1px solid rgba(255,255,255,0.05);
+    cursor: pointer; transition: all 0.2s;
+    border: 1px solid ${colors.border};
+    box-shadow: 0 1px 2px ${colors.shadow};
   }
-  .turno-card:hover { background: rgba(0,153,168,0.1); border-color: ${colors.primary}; }
-  .turno-info h3 { font-size: 18px; margin-bottom: 4px; }
-  .turno-info p { color: ${colors.light}; font-size: 14px; opacity: 0.7; }
+  .turno-card:hover { border-color: ${colors.primary}; box-shadow: 0 2px 8px ${colors.shadowHover}; background: ${colors.bgCardHover}; }
+  .turno-info h3 { font-size: 16px; margin-bottom: 4px; font-weight: 600; }
+  .turno-info p { color: ${colors.textSecondary}; font-size: 13px; }
   .turno-meta { text-align: right; }
-  .turno-meta .time { color: ${colors.light}; font-size: 14px; opacity: 0.7; }
+  .turno-meta .time { color: ${colors.textMuted}; font-size: 13px; }
   .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 24px; }
-  .kpi { 
-    background: rgba(255,255,255,0.05); border-radius: 12px; padding: 20px; text-align: center;
-    border: 1px solid rgba(255,255,255,0.05);
+  .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin-bottom: 24px; }
+  .kpi {
+    background: ${colors.bgCard}; border-radius: 12px; padding: 20px; text-align: center;
+    border: 1px solid ${colors.border}; box-shadow: 0 1px 2px ${colors.shadow};
   }
   .kpi-value { font-size: 36px; font-weight: 700; color: ${colors.primary}; }
-  .kpi-label { color: ${colors.light}; font-size: 14px; margin-top: 4px; opacity: 0.7; }
-  .dock-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin-top: 16px; }
-  .dock { 
-    padding: 12px 8px; border-radius: 8px; text-align: center; 
+  .kpi-label { color: ${colors.textMuted}; font-size: 13px; margin-top: 4px; font-weight: 500; }
+  .dock-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(72px, 1fr)); gap: 8px; margin-top: 16px; }
+  .dock {
+    padding: 12px 8px; border-radius: 8px; text-align: center;
     font-weight: 600; font-size: 14px;
   }
-  .dock-free { background: rgba(143,191,76,0.2); color: ${colors.green}; }
-  .dock-occupied { background: rgba(255,171,64,0.2); color: ${colors.orange}; }
+  .dock-free { background: #f0fdf4; color: #16a34a; border: 1px solid #bbf7d0; }
+  .dock-occupied { background: #fffbeb; color: #d97706; border: 1px solid #fde68a; }
   .warehouse { margin-bottom: 24px; }
-  .warehouse h3 { margin-bottom: 12px; color: ${colors.light}; opacity: 0.8; }
+  .warehouse h3 { margin-bottom: 12px; color: ${colors.textSecondary}; font-weight: 600; }
   .tabs { display: flex; gap: 8px; margin-bottom: 20px; }
-  .tab { 
-    flex: 1; padding: 12px; border-radius: 8px; border: none; 
-    background: rgba(255,255,255,0.05); color: ${colors.light}; cursor: pointer;
-    font-weight: 600; transition: all 0.2s;
+  .tab {
+    flex: 1; padding: 12px; border-radius: 8px; border: 2px solid ${colors.border};
+    background: ${colors.bgCard}; color: ${colors.textSecondary}; cursor: pointer;
+    font-family: 'Montserrat', sans-serif; font-weight: 600; transition: all 0.2s;
   }
-  .tab:hover { background: rgba(0,153,168,0.2); }
-  .tab.active { background: ${colors.primary}; color: white; }
+  .tab:hover { border-color: ${colors.primary}; color: ${colors.primary}; }
+  .tab.active { background: ${colors.primary}; color: white; border-color: ${colors.primary}; }
   .timeline { margin-top: 20px; }
-  .timeline-item { 
-    display: flex; align-items: center; padding: 16px 0; 
-    border-left: 2px solid rgba(255,255,255,0.1); 
-    margin-left: 12px; padding-left: 24px; position: relative; 
+  .timeline-item {
+    display: flex; align-items: center; padding: 16px 0;
+    border-left: 2px solid ${colors.border};
+    margin-left: 12px; padding-left: 24px; position: relative;
   }
-  .timeline-item::before { 
-    content: ''; position: absolute; left: -7px; width: 12px; height: 12px; 
-    border-radius: 50%; background: rgba(255,255,255,0.3); 
+  .timeline-item::before {
+    content: ''; position: absolute; left: -7px; width: 12px; height: 12px;
+    border-radius: 50%; background: ${colors.border};
   }
-  .timeline-item.done::before { background: ${colors.green}; }
-  .timeline-item.current::before { background: ${colors.primary}; box-shadow: 0 0 0 4px rgba(0,153,168,0.3); }
-  .timeline-time { color: ${colors.light}; font-size: 14px; width: 100px; opacity: 0.7; }
-  .timeline-text { flex: 1; }
+  .timeline-item.done::before { background: ${colors.primary}; }
+  .timeline-item.current::before { background: ${colors.primary}; box-shadow: 0 0 0 4px rgba(0,153,168,0.2); }
+  .timeline-time { color: ${colors.textMuted}; font-size: 13px; width: 100px; font-weight: 500; }
+  .timeline-text { flex: 1; font-weight: 500; }
   .modal-overlay {
     display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
-    background: rgba(0,0,0,0.8); z-index: 1000; 
+    background: rgba(0,0,0,0.5); z-index: 1000; backdrop-filter: blur(4px);
     justify-content: center; align-items: center; padding: 20px;
   }
   .modal-overlay.active { display: flex; }
   .modal {
-    background: ${colors.darkBlue}; border-radius: 16px; padding: 24px;
+    background: ${colors.bgCard}; border-radius: 16px; padding: 24px;
     max-width: 500px; width: 100%; max-height: 90vh; overflow-y: auto;
-    border: 1px solid rgba(255,255,255,0.1);
+    border: 1px solid ${colors.border}; box-shadow: 0 20px 60px rgba(0,0,0,0.15);
   }
   .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
-  .modal-close { 
-    background: none; border: none; color: ${colors.light}; font-size: 24px; 
-    cursor: pointer; padding: 4px 8px;
+  .modal-close {
+    background: ${colors.light}; border: none; color: ${colors.textSecondary}; font-size: 20px;
+    cursor: pointer; padding: 4px 10px; border-radius: 8px; transition: background 0.2s;
   }
-  .modal-close:hover { color: white; }
-  .header { 
-    display: flex; align-items: center; justify-content: space-between; 
-    margin-bottom: 24px; padding-bottom: 16px; 
-    border-bottom: 1px solid rgba(255,255,255,0.1);
+  .modal-close:hover { background: ${colors.border}; color: ${colors.textPrimary}; }
+  .header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 24px; padding-bottom: 16px;
+    border-bottom: 1px solid ${colors.border};
   }
   .header-left { display: flex; align-items: center; gap: 16px; }
   .assign-row { display: flex; gap: 8px; margin-top: 12px; align-items: stretch; }
-  .assign-row select { 
-    flex: 2; margin: 0; padding: 16px; font-size: 18px; font-weight: 600;
+  .assign-row select {
+    flex: 2; margin: 0; padding: 16px; font-size: 16px; font-weight: 600;
     min-height: 56px; min-width: 0;
   }
-  .assign-row button { flex: 1; margin: 0; padding: 16px 12px; min-height: 56px; font-size: 16px; white-space: nowrap; }
-  .refresh-notice { 
-    text-align: center; color: ${colors.light}; font-size: 13px; 
-    margin-top: 20px; opacity: 0.6;
+  .assign-row button { flex: 1; margin: 0; padding: 16px 12px; min-height: 56px; font-size: 14px; white-space: nowrap; }
+  .refresh-notice {
+    text-align: center; color: ${colors.textMuted}; font-size: 13px;
+    margin-top: 20px;
+  }
+  .toast { position: fixed; top: 20px; right: 20px; padding: 14px 20px; border-radius: 10px; font-weight: 500; font-size: 14px; z-index: 2000; transform: translateY(-20px); opacity: 0; transition: all 0.3s; pointer-events: none; }
+  .toast.show { transform: translateY(0); opacity: 1; }
+  .toast-success { background: #f0fdf4; color: #16a34a; border: 1px solid #bbf7d0; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+  .toast-error { background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+  .time-badge { font-size: 11px; color: ${colors.textMuted}; font-weight: 500; white-space: nowrap; }
+  .time-badge.warning { color: #d97706; }
+  .time-badge.danger { color: #dc2626; font-weight: 600; }
+  @media (max-width: 600px) {
+    .grid-2 { grid-template-columns: 1fr 1fr; gap: 8px; }
+    .grid-3 { grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+    .kpi { padding: 14px; }
+    .kpi-value { font-size: 28px; }
+    .container-wide { padding: 12px; }
   }
 `;
 
@@ -464,18 +506,21 @@ app.get('/entrada', (req, res) => {
     <html><head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      ${fontLink}
       <title>Entrada - OCASA Dock Manager</title>
       <style>${styles}
         select, input[type="text"] { padding: 16px; font-size: 18px; min-height: 56px; }
-        label { display: block; text-align: left; color: ${colors.muted}; font-size: 14px; margin-bottom: 4px; margin-top: 12px; font-weight: 600; }
+        label { display: block; text-align: left; color: ${colors.textMuted}; font-size: 14px; margin-bottom: 4px; margin-top: 12px; font-weight: 600; }
         .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
         .video-container { position: relative; width: 100%; padding-bottom: 56.25%; margin: 16px 0; border-radius: 12px; overflow: hidden; }
         .video-container iframe { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; }
         .induccion { background: rgba(0,153,168,0.1); border: 1px solid ${colors.primary}; border-radius: 12px; padding: 16px; margin-bottom: 20px; text-align: left; }
         .induccion h3 { margin: 0 0 12px 0; color: ${colors.primary}; }
         .induccion ul { margin: 0; padding-left: 20px; }
-        .induccion li { margin-bottom: 8px; font-size: 14px; color: ${colors.light}; }
-        .induccion strong { color: ${colors.accent}; }
+        .induccion li { margin-bottom: 8px; font-size: 14px; color: ${colors.textSecondary}; }
+        .induccion strong { color: ${colors.primary}; }
+        .field-error { border-color: #dc2626 !important; box-shadow: 0 0 0 3px rgba(220,38,38,0.1) !important; }
+        .field-error-msg { color: #dc2626; font-size: 12px; font-weight: 500; margin: -4px 0 8px 0; text-align: left; display: none; }
       </style>
     </head><body>
       <div class="container" style="text-align: center; padding-top: 40px;">
@@ -485,19 +530,24 @@ app.get('/entrada', (req, res) => {
         <p class="subtitle">Mirá el video y completá los datos</p>
         
         <div class="induccion">
-          <h3>📋 Antes de empezar, mirá este video:</h3>
-          <div class="video-container">
-            <iframe src="https://drive.google.com/file/d/10wY5huXmtAHToymtkXURu54lB_Subpxh/preview" allow="autoplay"></iframe>
+          <div onclick="toggleVideo()" style="cursor:pointer; display:flex; justify-content:space-between; align-items:center;">
+            <h3 style="margin:0;">📋 Video de inducción y puntos importantes</h3>
+            <span id="toggleIcon" style="font-size:20px; transition: transform 0.3s;">▼</span>
           </div>
-          
-          <h3>📌 Puntos importantes:</h3>
-          <ul>
-            <li>El <strong>número de viaje es opcional</strong>, pero si lo tenés, ingresalo.</li>
-            <li>Si <strong>no sabés a qué nave ir</strong> (PL2 o PL3), consultá con la guardia.</li>
-            <li><strong>NO cierres esta página</strong> después de registrarte. Podés minimizarla.</li>
-            <li><strong>Todas las instrucciones</strong> (a qué dársena ir, cuándo atracar) te llegan por acá.</li>
-            <li>Usá <strong>zapatos de seguridad</strong> y <strong>chaleco reflectivo</strong> en todo momento.</li>
-          </ul>
+          <div id="videoSection" style="display:none; margin-top:12px;">
+            <div class="video-container">
+              <iframe src="https://drive.google.com/file/d/10wY5huXmtAHToymtkXURu54lB_Subpxh/preview" allow="autoplay" title="Video de inducción de seguridad"></iframe>
+            </div>
+
+            <h3>📌 Puntos importantes:</h3>
+            <ul>
+              <li>El <strong>número de viaje es opcional</strong>, pero si lo tenés, ingresalo.</li>
+              <li>Si <strong>no sabés a qué nave ir</strong> (PL2 o PL3), consultá con la guardia.</li>
+              <li><strong>NO cierres esta página</strong> después de registrarte. Podés minimizarla.</li>
+              <li><strong>Todas las instrucciones</strong> (a qué dársena ir, cuándo atracar) te llegan por acá.</li>
+              <li>Usá <strong>zapatos de seguridad</strong> y <strong>chaleco reflectivo</strong> en todo momento.</li>
+            </ul>
+          </div>
         </div>
         
         <div id="error" class="error" style="display:none;"></div>
@@ -509,10 +559,14 @@ app.get('/entrada', (req, res) => {
                  style="text-transform: uppercase; font-family: monospace; font-size: 24px; text-align: center;">
           
           <label>TRANSPORTISTA *</label>
-          <select id="carrier">
-            <option value="" disabled selected>Seleccioná transportista...</option>
-            ${carrierOptions}
-          </select>
+          <div style="position: relative;">
+            <input type="text" id="carrierSearch" placeholder="Escribí para buscar transportista..." autocomplete="off"
+                   style="font-size: 16px;">
+            <input type="hidden" id="carrier" value="">
+            <div id="carrierDropdown" style="display:none; position:absolute; top:100%; left:0; right:0; z-index:100;
+                 background:${colors.bgCard}; border:1px solid ${colors.border}; border-top:none; border-radius:0 0 12px 12px;
+                 max-height:200px; overflow-y:auto; box-shadow: 0 8px 24px ${colors.shadow};"></div>
+          </div>
           
           <label>N° DE VIAJE (opcional)</label>
           <input type="text" id="tripNumber" placeholder="Ej: 123456" maxlength="20">
@@ -543,11 +597,64 @@ app.get('/entrada', (req, res) => {
       </div>
       
       <script>
+        // Toggle video inducción
+        function toggleVideo() {
+          const section = document.getElementById('videoSection');
+          const icon = document.getElementById('toggleIcon');
+          if (section.style.display === 'none') {
+            section.style.display = 'block';
+            icon.style.transform = 'rotate(180deg)';
+          } else {
+            section.style.display = 'none';
+            icon.style.transform = 'rotate(0)';
+          }
+        }
+
+        // Combobox transportistas
+        const allCarriers = ${JSON.stringify(carriers)};
+        const searchInput = document.getElementById('carrierSearch');
+        const carrierHidden = document.getElementById('carrier');
+        const dropdown = document.getElementById('carrierDropdown');
+
+        searchInput.addEventListener('input', function() {
+          const val = this.value.toLowerCase();
+          carrierHidden.value = '';
+          if (val.length === 0) { dropdown.style.display = 'none'; return; }
+          const matches = allCarriers.filter(c => c.toLowerCase().includes(val));
+          if (matches.length === 0) {
+            dropdown.innerHTML = '<div style="padding:12px; color:${colors.textMuted}; font-size:14px;">Sin resultados</div>';
+          } else {
+            dropdown.innerHTML = matches.map(c =>
+              '<div style="padding:10px 16px; cursor:pointer; font-size:14px; transition: background 0.15s;" ' +
+              'onmouseover="this.style.background=\\'${colors.bgCardHover}\\'" ' +
+              'onmouseout="this.style.background=\\'transparent\\'" ' +
+              'onclick="selectCarrier(\\'' + c.replace(/'/g, "\\\\'") + '\\')">' + c + '</div>'
+            ).join('');
+          }
+          dropdown.style.display = 'block';
+        });
+
+        searchInput.addEventListener('focus', function() {
+          if (this.value.length > 0) dropdown.style.display = 'block';
+        });
+
+        document.addEventListener('click', function(e) {
+          if (!e.target.closest('#carrierSearch') && !e.target.closest('#carrierDropdown')) {
+            dropdown.style.display = 'none';
+          }
+        });
+
+        function selectCarrier(name) {
+          searchInput.value = name;
+          carrierHidden.value = name;
+          dropdown.style.display = 'none';
+        }
+
         document.getElementById('truck').addEventListener('keyup', function(e) {
           this.value = this.value.toUpperCase();
         });
         document.getElementById('truck').focus();
-        
+
         async function registrar() {
           const truck = document.getElementById('truck').value.trim();
           const carrier = document.getElementById('carrier').value;
@@ -555,10 +662,13 @@ app.get('/entrada', (req, res) => {
           const warehouse = document.getElementById('warehouse').value;
           const operation = document.getElementById('operation').value;
           
-          if (!truck) { showError('Ingresá tu patente'); return; }
-          if (!carrier) { showError('Seleccioná un transportista'); return; }
-          if (!warehouse) { showError('Seleccioná la nave de destino'); return; }
-          if (!operation) { showError('Seleccioná el tipo de operación'); return; }
+          clearFieldErrors();
+          let hasError = false;
+          if (!truck) { markFieldError('truck', 'Ingresá tu patente'); hasError = true; }
+          if (!carrier) { markFieldError('carrierSearch', 'Seleccioná un transportista'); hasError = true; }
+          if (!warehouse) { markFieldError('warehouse', 'Seleccioná la nave'); hasError = true; }
+          if (!operation) { markFieldError('operation', 'Seleccioná la operación'); hasError = true; }
+          if (hasError) return;
           
           document.getElementById('btnSubmit').disabled = true;
           document.getElementById('btnSubmit').innerHTML = '⏳ Procesando...';
@@ -589,6 +699,25 @@ app.get('/entrada', (req, res) => {
           document.getElementById('btnSubmit').innerHTML = '🚛 Registrar Ingreso';
         }
         
+        function markFieldError(fieldId, msg) {
+          const el = document.getElementById(fieldId);
+          el.classList.add('field-error');
+          let msgEl = el.parentNode.querySelector('.field-error-msg');
+          if (!msgEl) {
+            msgEl = document.createElement('p');
+            msgEl.className = 'field-error-msg';
+            el.parentNode.insertBefore(msgEl, el.nextSibling);
+          }
+          msgEl.textContent = msg;
+          msgEl.style.display = 'block';
+        }
+
+        function clearFieldErrors() {
+          document.querySelectorAll('.field-error').forEach(el => el.classList.remove('field-error'));
+          document.querySelectorAll('.field-error-msg').forEach(el => el.style.display = 'none');
+          document.getElementById('error').style.display = 'none';
+        }
+
         function showError(msg) {
           document.getElementById('success').style.display = 'none';
           document.getElementById('error').textContent = msg;
@@ -611,6 +740,7 @@ app.get('/turno/:id', (req, res) => {
     <html><head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      ${fontLink}
       <title>Mi Turno - OCASA Dock Manager</title>
       <style>${styles}</style>
     </head><body>
@@ -672,10 +802,10 @@ app.get('/turno/:id', (req, res) => {
           
           html += '</div></div>';
           // Safety notice
-          html += '<div class="card" style="background: rgba(255,193,7,0.15); border: 1px solid rgba(255,193,7,0.4); margin-top: 16px;">';
-          html += '<p style="margin: 0; font-weight: 600; color: #ffc107;">⚠️ PUNTOS A TENER EN CUENTA</p>';
-          html += '<p style="margin: 8px 0 0 0; font-size: 14px; color: #efefef;">• Usar <strong>zapatos de seguridad</strong></p>';
-          html += '<p style="margin: 4px 0 0 0; font-size: 14px; color: #efefef;">• Usar <strong>chaleco reflectivo</strong></p>';
+          html += '<div class="card" style="background: #fffbeb; border: 1px solid #fde68a; margin-top: 16px;">';
+          html += '<p style="margin: 0; font-weight: 600; color: #d97706;">⚠️ PUNTOS A TENER EN CUENTA</p>';
+          html += '<p style="margin: 8px 0 0 0; font-size: 14px; color: ${colors.textPrimary};">• Usar <strong>zapatos de seguridad</strong></p>';
+          html += '<p style="margin: 4px 0 0 0; font-size: 14px; color: ${colors.textPrimary};">• Usar <strong>chaleco reflectivo</strong></p>';
           html += '</div>';
           html += '<p class="refresh-notice">🔄 Actualizando automáticamente</p>';
           
@@ -710,6 +840,7 @@ app.get('/dock/:dockId', (req, res) => {
     <html><head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      ${fontLink}
       <title>Dársena ${dockId} - OCASA Dock Manager</title>
       <style>${styles}</style>
     </head><body>
@@ -718,52 +849,108 @@ app.get('/dock/:dockId', (req, res) => {
         <div id="loading">
           <div class="icon-circle icon-primary">⚓</div>
           <h1>Dársena ${dockId}</h1>
-          <p class="subtitle">⏳ Procesando...</p>
+          <p class="subtitle">Consultando estado...</p>
         </div>
+        <div id="preview" style="display:none;"></div>
         <div id="result" style="display:none;"></div>
       </div>
-      
+
       <script>
-        async function procesar() {
+        async function cargarEstado() {
+          try {
+            const res = await fetch('/api/turnos');
+            const data = await res.json();
+            const turnos = data.turnos || [];
+            const turno = turnos.find(t => t.dock === '${dockId}' && t.status !== 'EGRESADO' && t.status !== 'DESATRACADO');
+
+            document.getElementById('loading').style.display = 'none';
+
+            if (!turno) {
+              document.getElementById('preview').style.display = 'block';
+              document.getElementById('preview').innerHTML =
+                '<div class="card">' +
+                '<div class="icon-circle" style="background: ${colors.light};">✓</div>' +
+                '<h2 style="color: ${colors.textMuted};">Dársena libre</h2>' +
+                '<p class="subtitle">No hay ningún camión asignado a ${dockId}</p>' +
+                '</div>';
+              return;
+            }
+
+            const accion = turno.status === 'DARSENA_ASIGNADA' ? 'atracar' : 'desatracar';
+            const accionLabel = accion === 'atracar' ? '⚓ Confirmar Atraque' : '🚪 Confirmar Desatraque';
+            const accionColor = accion === 'atracar' ? 'btn-primary' : 'btn-orange';
+
+            document.getElementById('preview').style.display = 'block';
+            document.getElementById('preview').innerHTML =
+              '<div class="card" style="text-align:left;">' +
+              '<div style="text-align:center; margin-bottom: 16px;">' +
+              '<div class="icon-circle icon-primary" style="margin: 0 auto 12px;">🚛</div>' +
+              '<h1 style="margin:0;">' + turno.truck + '</h1>' +
+              '<p style="color:${colors.textMuted}; margin-top:4px;">' + turno.carrier + '</p>' +
+              '</div>' +
+              '<div style="border-top: 1px solid ${colors.border}; padding-top: 16px; margin-top: 8px;">' +
+              '<p style="margin: 6px 0;"><strong>Dársena:</strong> ${dockId}</p>' +
+              '<p style="margin: 6px 0;"><strong>Operación:</strong> ' + (turno.operation || '-') + '</p>' +
+              '<p style="margin: 6px 0;"><strong>Nave:</strong> ' + (turno.warehouse || '-') + '</p>' +
+              '<p style="margin: 6px 0;"><strong>Estado:</strong> ' + turno.status.replace(/_/g, ' ') + '</p>' +
+              '</div>' +
+              '</div>' +
+              '<p style="color:${colors.textSecondary}; font-size:14px; font-weight:500; margin-bottom: 8px;">¿Confirmar <strong>' + accion + '</strong> de este camión?</p>' +
+              '<button class="btn ' + accionColor + '" onclick="ejecutar()" id="btnConfirm">' + accionLabel + '</button>' +
+              '<button class="btn" style="background:${colors.light}; color:${colors.textSecondary}; margin-top:8px;" onclick="location.reload()">Cancelar</button>';
+          } catch(e) {
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('preview').style.display = 'block';
+            document.getElementById('preview').innerHTML =
+              '<div class="card"><div class="icon-circle" style="background:#fef2f2;">❌</div>' +
+              '<h1 style="color:#dc2626;">Error de conexión</h1>' +
+              '<button class="btn btn-primary" onclick="location.reload()">Reintentar</button></div>';
+          }
+        }
+
+        async function ejecutar() {
+          document.getElementById('btnConfirm').disabled = true;
+          document.getElementById('btnConfirm').innerHTML = '⏳ Procesando...';
+
           try {
             const res = await fetch('/api/dock/${dockId}', { method: 'POST' });
             const data = await res.json();
-            
-            document.getElementById('loading').style.display = 'none';
+
+            document.getElementById('preview').style.display = 'none';
             document.getElementById('result').style.display = 'block';
-            
+
             if (data.success) {
               if (data.action === 'atracado') {
-                document.getElementById('result').innerHTML = 
+                document.getElementById('result').innerHTML =
                   '<div class="card"><div class="icon-circle icon-green">✅</div>' +
-                  '<h1 style="color:#8fbf4c;">¡Atracado!</h1>' +
+                  '<h1 style="color:#16a34a;">¡Atracado!</h1>' +
                   '<p class="subtitle">Camión ' + data.truck + '</p>' +
-                  '<p style="color:#efefef; opacity:0.7;">Dársena ${dockId}</p></div>';
+                  '<p style="color:${colors.textMuted};">Dársena ${dockId}</p></div>' +
+                  '<button class="btn btn-primary" onclick="location.reload()">Escanear otra dársena</button>';
               } else {
-                document.getElementById('result').innerHTML = 
+                document.getElementById('result').innerHTML =
                   '<div class="card"><div class="icon-circle icon-orange">🚪</div>' +
-                  '<h1 style="color:#ffab40;">¡Desatracado!</h1>' +
+                  '<h1 style="color:#d97706;">¡Desatracado!</h1>' +
                   '<p class="subtitle">Camión ' + data.truck + '</p>' +
-                  '<p style="color:#efefef; opacity:0.7;">Puede dirigirse a la salida</p></div>';
+                  '<p style="color:${colors.textMuted};">Puede dirigirse a la salida</p></div>' +
+                  '<button class="btn btn-primary" onclick="location.reload()">Escanear otra dársena</button>';
               }
             } else {
-              document.getElementById('result').innerHTML = 
-                '<div class="card"><div class="icon-circle" style="background:rgba(239,68,68,0.2);">❌</div>' +
-                '<h1 style="color:#ef4444;">Error</h1>' +
+              document.getElementById('result').innerHTML =
+                '<div class="card"><div class="icon-circle" style="background:#fef2f2;">❌</div>' +
+                '<h1 style="color:#dc2626;">Error</h1>' +
                 '<p class="subtitle">' + data.error + '</p>' +
                 '<button class="btn btn-primary" onclick="location.reload()">Reintentar</button></div>';
             }
           } catch(e) {
-            document.getElementById('loading').style.display = 'none';
-            document.getElementById('result').style.display = 'block';
-            document.getElementById('result').innerHTML = 
-              '<div class="card"><div class="icon-circle" style="background:rgba(239,68,68,0.2);">❌</div>' +
-              '<h1 style="color:#ef4444;">Error de conexión</h1>' +
+            document.getElementById('result').innerHTML =
+              '<div class="card"><div class="icon-circle" style="background:#fef2f2;">❌</div>' +
+              '<h1 style="color:#dc2626;">Error de conexión</h1>' +
               '<button class="btn btn-primary" onclick="location.reload()">Reintentar</button></div>';
           }
         }
-        
-        procesar();
+
+        cargarEstado();
       </script>
     </body></html>
   `);
@@ -776,6 +963,7 @@ app.get('/salida', (req, res) => {
     <html><head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      ${fontLink}
       <title>Salida - OCASA Dock Manager</title>
       <style>${styles}</style>
     </head><body>
@@ -820,7 +1008,28 @@ app.get('/salida', (req, res) => {
             const data = await res.json();
             
             if (data.success) {
-              showSuccess('✅ ¡Egreso registrado! Buen viaje 🚛');
+              const t = data.turno;
+              const entradaTime = t.ts_entrada ? new Date(t.ts_entrada) : null;
+              const tiempoEnPredio = entradaTime ? Math.floor((Date.now() - entradaTime.getTime()) / 60000) : 0;
+              const horas = Math.floor(tiempoEnPredio / 60);
+              const mins = tiempoEnPredio % 60;
+              const tiempoStr = horas > 0 ? horas + 'h ' + mins + 'min' : mins + ' min';
+
+              document.getElementById('success').innerHTML =
+                '<strong>✅ Egreso registrado</strong><br>' +
+                '<span style="font-size:13px;">Patente: <strong>' + t.truck + '</strong> — ' +
+                'Transportista: <strong>' + t.carrier + '</strong> — ' +
+                'Tiempo en predio: <strong>' + tiempoStr + '</strong></span>';
+              document.getElementById('success').style.display = 'block';
+              document.getElementById('error').style.display = 'none';
+
+              setTimeout(() => {
+                document.getElementById('truck').value = '';
+                document.getElementById('success').style.display = 'none';
+                document.getElementById('btnSubmit').disabled = false;
+                document.getElementById('btnSubmit').innerHTML = '🚪 Registrar Salida';
+                document.getElementById('truck').focus();
+              }, 5000);
             } else {
               showError(data.error);
               resetBtn();
@@ -858,24 +1067,26 @@ app.get('/operador', (req, res) => {
     <html><head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      ${fontLink}
       <title>Panel Operador - OCASA Dock Manager</title>
       <style>${styles}
         .nav-tabs { display: flex; gap: 8px; margin-bottom: 16px; }
-        .nav-tab { flex: 1; padding: 12px; border: 2px solid ${colors.primary}; background: transparent; color: ${colors.primary}; border-radius: 8px; font-size: 16px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+        .nav-tab { flex: 1; padding: 12px; border: 2px solid ${colors.primary}; background: ${colors.bgCard}; color: ${colors.primary}; border-radius: 8px; font-family: 'Montserrat', sans-serif; font-size: 15px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+        .nav-tab:hover { background: rgba(0,153,168,0.06); }
         .nav-tab.active { background: ${colors.primary}; color: white; }
-        .turno-row { display: flex; align-items: center; gap: 12px; padding: 12px; background: rgba(255,255,255,0.05); border-radius: 8px; margin-bottom: 8px; flex-wrap: wrap; }
-        .turno-row:hover { background: rgba(255,255,255,0.1); }
+        .turno-row { display: flex; align-items: center; gap: 12px; padding: 14px; background: ${colors.bgCard}; border-radius: 10px; margin-bottom: 8px; flex-wrap: wrap; border: 1px solid ${colors.border}; box-shadow: 0 1px 2px ${colors.shadow}; transition: all 0.2s; }
+        .turno-row:hover { border-color: ${colors.primary}; box-shadow: 0 2px 8px ${colors.shadowHover}; }
         .turno-info-main { flex: 1; min-width: 200px; }
-        .turno-info-main h3 { margin: 0; font-size: 16px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-        .turno-info-main p { margin: 4px 0 0 0; font-size: 13px; color: ${colors.muted}; }
+        .turno-info-main h3 { margin: 0; font-size: 15px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .turno-info-main p { margin: 4px 0 0 0; font-size: 13px; color: ${colors.textMuted}; }
         .turno-actions { display: flex; gap: 8px; align-items: center; }
-        .turno-actions select { padding: 8px 12px; font-size: 14px; min-height: 40px; border-radius: 6px; min-width: 100px; }
-        .turno-actions button { padding: 8px 16px; font-size: 14px; min-height: 40px; white-space: nowrap; }
-        .op-badge { font-size: 11px; padding: 2px 6px; border-radius: 4px; font-weight: 600; }
-        .op-descarga { background: #dc3545; color: white; }
-        .op-colecta { background: #0d6efd; color: white; }
-        .dock-cell { cursor: pointer; transition: transform 0.1s; }
-        .dock-cell:hover { transform: scale(1.1); }
+        .turno-actions select { padding: 8px 12px; font-size: 14px; min-height: 40px; border-radius: 8px; min-width: 100px; }
+        .turno-actions button { padding: 8px 16px; font-size: 14px; min-height: 40px; white-space: nowrap; border-radius: 8px; }
+        .op-badge { font-size: 11px; padding: 2px 8px; border-radius: 4px; font-weight: 600; letter-spacing: 0.3px; }
+        .op-descarga { background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; }
+        .op-colecta { background: #eff6ff; color: #2563eb; border: 1px solid #bfdbfe; }
+        .dock-cell { cursor: pointer; transition: transform 0.1s, box-shadow 0.2s; }
+        .dock-cell:hover { transform: scale(1.08); box-shadow: 0 2px 8px ${colors.shadowHover}; }
       </style>
     </head><body>
       <div class="container-wide">
@@ -887,7 +1098,7 @@ app.get('/operador', (req, res) => {
               <p class="subtitle" style="margin:0;">Gestión de dársenas y turnos</p>
             </div>
           </div>
-          <button id="audioBtn" onclick="enableAudio()" style="background: rgba(255,193,7,0.2); border: 1px solid #ffc107; color: #ffc107; padding: 8px 16px; border-radius: 8px; font-size: 14px; cursor: pointer;">🔔 Activar sonido</button>
+          <button id="audioBtn" onclick="enableAudio()" style="background: #fffbeb; border: 1px solid #fde68a; color: #d97706; padding: 8px 16px; border-radius: 8px; font-family: 'Montserrat', sans-serif; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.2s;">🔔 Activar sonido</button>
         </div>
         
         <div class="nav-tabs">
@@ -896,11 +1107,13 @@ app.get('/operador', (req, res) => {
           <button class="nav-tab" onclick="setFilter('TODOS')" id="tab-TODOS">📋 Todos</button>
         </div>
         
-        <div class="grid-2" id="kpis">
+        <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:12px; margin-bottom:24px;" id="kpis">
           <div class="kpi"><div class="kpi-value">-</div><div class="kpi-label">En predio</div></div>
+          <div class="kpi"><div class="kpi-value">-</div><div class="kpi-label">Esperando</div></div>
           <div class="kpi"><div class="kpi-value">-</div><div class="kpi-label">Atracados</div></div>
+          <div class="kpi"><div class="kpi-value">-</div><div class="kpi-label">Dársenas libres</div></div>
         </div>
-        
+
         <h2>Turnos activos</h2>
         <div id="turnos"></div>
         
@@ -952,8 +1165,9 @@ app.get('/operador', (req, res) => {
         function enableAudio() {
           audioEnabled = true;
           document.getElementById('audioBtn').innerHTML = '🔊 Sonido activado';
-          document.getElementById('audioBtn').style.background = 'rgba(143,191,76,0.3)';
-          document.getElementById('audioBtn').style.borderColor = '#8fbf4c';
+          document.getElementById('audioBtn').style.background = '#f0fdf4';
+          document.getElementById('audioBtn').style.borderColor = '#bbf7d0';
+          document.getElementById('audioBtn').style.color = '#16a34a';
         }
         
         function setFilter(filter) {
@@ -991,13 +1205,40 @@ app.get('/operador', (req, res) => {
           return allTurnos.filter(t => t.warehouse === currentFilter || (!t.warehouse && currentFilter === 'PL2'));
         }
         
+        function getTimeAgo(ts) {
+          if (!ts) return '';
+          const mins = Math.floor((Date.now() - new Date(ts).getTime()) / 60000);
+          if (mins < 1) return 'ahora';
+          if (mins < 60) return mins + ' min';
+          const hrs = Math.floor(mins / 60);
+          const remMins = mins % 60;
+          return hrs + 'h ' + remMins + 'm';
+        }
+
+        function getTimeBadgeClass(ts) {
+          if (!ts) return 'time-badge';
+          const mins = Math.floor((Date.now() - new Date(ts).getTime()) / 60000);
+          if (mins > 120) return 'time-badge danger';
+          if (mins > 60) return 'time-badge warning';
+          return 'time-badge';
+        }
+
         function renderKPIs() {
           const filtered = getFilteredTurnos();
-          const enPredio = filtered.filter(t => t.status !== 'EGRESADO').length;
-          const atracados = filtered.filter(t => t.status === 'ATRACADO').length;
-          document.getElementById('kpis').innerHTML = 
-            '<div class="kpi"><div class="kpi-value">' + enPredio + '</div><div class="kpi-label">En predio (' + currentFilter + ')</div></div>' +
-            '<div class="kpi"><div class="kpi-value">' + atracados + '</div><div class="kpi-label">Atracados</div></div>';
+          const activos = filtered.filter(t => t.status !== 'EGRESADO');
+          const enPredio = activos.length;
+          const esperando = activos.filter(t => t.status === 'ESPERANDO_ASIGNACION').length;
+          const atracados = activos.filter(t => t.status === 'ATRACADO').length;
+
+          const totalDocks = currentFilter === 'PL3' ? 19 : (currentFilter === 'PL2' ? 21 : 40);
+          const docksOcupados = activos.filter(t => t.dock && t.status !== 'DESATRACADO').length;
+          const docksLibres = totalDocks - docksOcupados;
+
+          document.getElementById('kpis').innerHTML =
+            '<div class="kpi"><div class="kpi-value">' + enPredio + '</div><div class="kpi-label">En predio</div></div>' +
+            '<div class="kpi"><div class="kpi-value" style="color:#d97706;">' + esperando + '</div><div class="kpi-label">Esperando</div></div>' +
+            '<div class="kpi"><div class="kpi-value">' + atracados + '</div><div class="kpi-label">Atracados</div></div>' +
+            '<div class="kpi"><div class="kpi-value" style="color:#16a34a;">' + docksLibres + '</div><div class="kpi-label">Dársenas libres</div></div>';
         }
         
         function renderTurnos() {
@@ -1047,7 +1288,10 @@ app.get('/operador', (req, res) => {
               html += '<button class="btn btn-orange" onclick="event.stopPropagation(); reasignar(\\'' + t.turno_id + '\\')">Reasignar</button>';
             }
             
-            html += '<span class="time">' + formatTime(t.ts_entrada) + '</span>';
+            html += '<div style="text-align:right;">';
+            html += '<div class="' + getTimeBadgeClass(t.ts_entrada) + '">⏱ ' + getTimeAgo(t.ts_entrada) + '</div>';
+            html += '<div class="time-badge">' + formatTime(t.ts_entrada) + '</div>';
+            html += '</div>';
             html += '</div></div>';
           });
           
@@ -1088,7 +1332,7 @@ app.get('/operador', (req, res) => {
             html += '<div style="text-align:center; padding: 16px 0;">';
             html += '<div class="icon-circle icon-green" style="margin: 0 auto 16px;">🚛</div>';
             html += '<h2 style="margin:0;">' + turno.truck + '</h2>';
-            html += '<p style="color:' + colors.muted + ';">' + turno.carrier + '</p>';
+            html += '<p style="color:' + colors.textMuted + ';">' + turno.carrier + '</p>';
             html += '<p>' + getStatusBadge(turno.status) + '</p>';
             if (turno.trip_number) html += '<p>Viaje: <strong>' + turno.trip_number + '</strong></p>';
             if (turno.operation) html += '<p>Operación: <strong>' + turno.operation + '</strong></p>';
@@ -1102,7 +1346,7 @@ app.get('/operador', (req, res) => {
           } else {
             html += '<div style="text-align:center; padding: 32px 0;">';
             html += '<div class="icon-circle" style="margin: 0 auto 16px; background: rgba(255,255,255,0.1);">✓</div>';
-            html += '<h3 style="margin:0; color:' + colors.muted + ';">Dársena libre</h3>';
+            html += '<h3 style="margin:0; color:' + colors.textMuted + ';">Dársena libre</h3>';
             html += '</div>';
           }
           
@@ -1122,19 +1366,20 @@ app.get('/operador', (req, res) => {
             });
             const data = await res.json();
             if (data.success) {
+              showToast('Dársena asignada correctamente', 'success');
               loadData();
             } else {
-              alert(data.error);
+              showToast(data.error, 'error');
             }
           } catch(e) {
-            alert('Error de conexión');
+            showToast('Error de conexión', 'error');
           }
         }
-        
+
         async function reasignar(turnoId) {
           const dock = document.getElementById('reasign-' + turnoId).value;
           if (!dock) {
-            alert('Seleccioná un dock para reasignar');
+            showToast('Seleccioná un dock para reasignar', 'error');
             return;
           }
           const warehouse = parseInt(dock.split('-')[1]) <= 20 ? 'PL2' : 'PL3';
@@ -1147,15 +1392,16 @@ app.get('/operador', (req, res) => {
             });
             const data = await res.json();
             if (data.success) {
+              showToast('Reasignación exitosa', 'success');
               loadData();
             } else {
-              alert(data.error);
+              showToast(data.error, 'error');
             }
           } catch(e) {
-            alert('Error de conexión');
+            showToast('Error de conexión', 'error');
           }
         }
-        
+
         function showDetail(turnoId) {
           const t = allTurnos.find(x => x.turno_id === turnoId);
           if (!t) return;
@@ -1191,11 +1437,28 @@ app.get('/operador', (req, res) => {
         function closeModal() {
           document.getElementById('modal').classList.remove('active');
         }
-        
+
+        document.addEventListener('keydown', function(e) {
+          if (e.key === 'Escape') closeModal();
+        });
+
         document.getElementById('modal').addEventListener('click', function(e) {
           if (e.target === this) closeModal();
         });
-        
+
+        function showToast(msg, type) {
+          let toast = document.getElementById('toast');
+          if (!toast) {
+            toast = document.createElement('div');
+            toast.id = 'toast';
+            document.body.appendChild(toast);
+          }
+          toast.className = 'toast toast-' + type;
+          toast.textContent = msg;
+          setTimeout(() => toast.classList.add('show'), 10);
+          setTimeout(() => toast.classList.remove('show'), 3000);
+        }
+
         function getStatusBadge(status) {
           const badges = {
             'ESPERANDO_ASIGNACION': '<span class="badge badge-yellow">Esperando</span>',
@@ -1206,17 +1469,17 @@ app.get('/operador', (req, res) => {
           };
           return badges[status] || status;
         }
-        
+
         function formatTime(ts) {
           if (!ts) return '--:--';
           return new Date(ts).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
         }
-        
+
         function formatDateTime(ts) {
           if (!ts) return '--:--';
           return new Date(ts).toLocaleString('es-AR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
         }
-        
+
         loadData();
         setInterval(loadData, 5000);
       </script>
@@ -1230,6 +1493,7 @@ app.get('/garita', (req, res) => {
     <html><head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      ${fontLink}
       <title>Control de Accesos - OCASA Dock Manager</title>
       <style>${styles}</style>
     </head><body>
@@ -1249,11 +1513,16 @@ app.get('/garita', (req, res) => {
           <div class="kpi"><div class="kpi-value">-</div><div class="kpi-label">Egresos hoy</div></div>
         </div>
         
+        <div style="margin-bottom: 16px;">
+          <input type="text" id="searchPatente" placeholder="Buscar por patente..." style="font-size:15px;"
+                 oninput="filterByPatente()">
+        </div>
+
         <div class="tabs">
           <button class="tab active" onclick="showTab('predio')">En Predio</button>
           <button class="tab" onclick="showTab('egresos')">Egresos</button>
         </div>
-        
+
         <div id="predio"></div>
         <div id="egresos" style="display:none;"></div>
         
@@ -1300,13 +1569,41 @@ app.get('/garita', (req, res) => {
             '<div class="kpi"><div class="kpi-value">' + egresosHoy + '</div><div class="kpi-label">Egresos hoy</div></div>';
         }
         
+        let searchFilter = '';
+
+        function filterByPatente() {
+          searchFilter = document.getElementById('searchPatente').value.toUpperCase();
+          renderPredio();
+          renderEgresos();
+        }
+
+        function getTimeAgo(ts) {
+          if (!ts) return '';
+          const mins = Math.floor((Date.now() - new Date(ts).getTime()) / 60000);
+          if (mins < 1) return 'ahora';
+          if (mins < 60) return mins + ' min';
+          const hrs = Math.floor(mins / 60);
+          const remMins = mins % 60;
+          return hrs + 'h ' + remMins + 'm';
+        }
+
+        function getTimeBadgeClass(ts) {
+          if (!ts) return 'time-badge';
+          const mins = Math.floor((Date.now() - new Date(ts).getTime()) / 60000);
+          if (mins > 120) return 'time-badge danger';
+          if (mins > 60) return 'time-badge warning';
+          return 'time-badge';
+        }
+
         function renderPredio() {
-          const enPredio = allTurnos.filter(t => t.status !== 'EGRESADO');
+          let enPredio = allTurnos.filter(t => t.status !== 'EGRESADO');
+          if (searchFilter) enPredio = enPredio.filter(t => t.truck.toUpperCase().includes(searchFilter));
+
           if (enPredio.length === 0) {
-            document.getElementById('predio').innerHTML = '<div class="card" style="text-align:center; opacity:0.6;">No hay vehículos en predio</div>';
+            document.getElementById('predio').innerHTML = '<div class="card" style="text-align:center; color:${colors.textMuted};">' + (searchFilter ? 'Sin resultados para "' + searchFilter + '"' : 'No hay vehículos en predio') + '</div>';
             return;
           }
-          
+
           let html = '';
           enPredio.forEach(t => {
             html += '<div class="turno-card" onclick="showDetail(\\'' + t.turno_id + '\\')">';
@@ -1315,11 +1612,11 @@ app.get('/garita', (req, res) => {
             html += '<p>' + t.carrier + (t.dock ? ' → ' + t.dock : '') + '</p>';
             html += '</div>';
             html += '<div class="turno-meta">';
-            html += '<div class="time">Ingreso</div>';
-            html += '<div class="time">' + formatTime(t.ts_entrada) + '</div>';
+            html += '<div class="' + getTimeBadgeClass(t.ts_entrada) + '">⏱ ' + getTimeAgo(t.ts_entrada) + '</div>';
+            html += '<div class="time-badge">' + formatTime(t.ts_entrada) + '</div>';
             html += '</div></div>';
           });
-          
+
           document.getElementById('predio').innerHTML = html;
         }
         
@@ -1381,11 +1678,15 @@ app.get('/garita', (req, res) => {
         function closeModal() {
           document.getElementById('modal').classList.remove('active');
         }
-        
+
+        document.addEventListener('keydown', function(e) {
+          if (e.key === 'Escape') closeModal();
+        });
+
         document.getElementById('modal').addEventListener('click', function(e) {
           if (e.target === this) closeModal();
         });
-        
+
         function getStatusBadge(status) {
           const badges = {
             'ESPERANDO_ASIGNACION': '<span class="badge badge-yellow">Esperando</span>',
@@ -1396,17 +1697,17 @@ app.get('/garita', (req, res) => {
           };
           return badges[status] || status;
         }
-        
+
         function formatTime(ts) {
           if (!ts) return '--:--';
           return new Date(ts).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
         }
-        
+
         function formatDateTime(ts) {
           if (!ts) return '--:--';
           return new Date(ts).toLocaleString('es-AR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
         }
-        
+
         loadData();
         setInterval(loadData, 5000);
       </script>
@@ -1448,6 +1749,7 @@ app.get('/admin', (req, res) => {
     <html><head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      ${fontLink}
       <title>Admin - OCASA Dock Manager</title>
       <style>${styles}
         .turno-admin { background: rgba(255,255,255,0.05); border-radius: 8px; padding: 12px; margin-bottom: 8px; }
@@ -1457,7 +1759,7 @@ app.get('/admin', (req, res) => {
         .turno-admin-actions button { padding: 6px 12px; font-size: 12px; }
         .edit-form { display: none; margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.1); }
         .edit-form.active { display: block; }
-        .edit-form label { display: block; font-size: 12px; color: ${colors.muted}; margin: 8px 0 4px; }
+        .edit-form label { display: block; font-size: 12px; color: ${colors.textMuted}; margin: 8px 0 4px; }
         .edit-form input, .edit-form select { width: 100%; padding: 8px; font-size: 14px; margin-bottom: 4px; }
         .edit-form .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
         .btn-delete { background: #dc3545 !important; }
