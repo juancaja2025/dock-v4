@@ -247,12 +247,59 @@ const styles = `
   .time-badge { font-size: 11px; color: ${colors.textMuted}; font-weight: 500; white-space: nowrap; }
   .time-badge.warning { color: #d97706; }
   .time-badge.danger { color: #dc2626; font-weight: 600; }
+
+  /* Dashboard KPIs */
+  .nav-tab-dashboard { background: rgba(0,153,168,0.06); border-color: ${colors.primary}; color: ${colors.primary}; }
+  .nav-tab-dashboard.active { background: ${colors.primaryDark}; color: white; border-color: ${colors.primaryDark}; }
+  .date-range-bar { display: flex; gap: 8px; margin-bottom: 20px; align-items: center; flex-wrap: wrap; }
+  .range-btn {
+    padding: 8px 16px; border: 1px solid ${colors.border}; border-radius: 8px;
+    background: ${colors.bgCard}; color: ${colors.textSecondary}; font-family: 'Montserrat', sans-serif;
+    font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.2s;
+  }
+  .range-btn:hover { border-color: ${colors.primary}; color: ${colors.primary}; }
+  .range-btn.active { background: ${colors.primary}; color: white; border-color: ${colors.primary}; }
+  .dash-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+  .dash-section {
+    background: ${colors.bgCard}; border-radius: 12px; padding: 20px;
+    border: 1px solid ${colors.border}; box-shadow: 0 1px 2px ${colors.shadow};
+  }
+  .dash-section h3 { font-size: 14px; color: ${colors.textSecondary}; margin: 0 0 16px 0; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+  .dash-full { grid-column: 1 / -1; }
+  .bar-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .bar-label { width: 100px; font-size: 12px; color: ${colors.textSecondary}; text-align: right; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .bar-track { flex: 1; height: 24px; background: ${colors.light}; border-radius: 6px; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 6px; transition: width 0.4s ease; min-width: 2px; }
+  .bar-fill-primary { background: ${colors.primary}; }
+  .bar-fill-green { background: ${colors.green}; }
+  .bar-fill-orange { background: ${colors.orange}; }
+  .bar-value { width: 50px; font-size: 12px; font-weight: 600; color: ${colors.textPrimary}; }
+  .hour-chart { display: flex; align-items: flex-end; gap: 2px; height: 120px; padding-top: 8px; }
+  .hour-bar-wrap { flex: 1; display: flex; flex-direction: column; align-items: center; height: 100%; justify-content: flex-end; }
+  .hour-bar { width: 100%; background: ${colors.primary}; border-radius: 3px 3px 0 0; transition: height 0.4s ease; min-width: 6px; cursor: pointer; position: relative; }
+  .hour-bar:hover { background: ${colors.primaryDark}; }
+  .hour-label { font-size: 9px; text-align: center; color: ${colors.textMuted}; margin-top: 4px; }
+  .hour-bar-tooltip { display: none; position: absolute; top: -24px; left: 50%; transform: translateX(-50%); background: ${colors.dark}; color: white; font-size: 11px; padding: 2px 6px; border-radius: 4px; white-space: nowrap; }
+  .hour-bar:hover .hour-bar-tooltip { display: block; }
+  .trend-chart { display: flex; align-items: flex-end; gap: 3px; height: 120px; padding-top: 8px; }
+  .trend-bar-wrap { flex: 1; display: flex; flex-direction: column; align-items: center; height: 100%; justify-content: flex-end; }
+  .trend-bar { width: 100%; background: ${colors.primary}; border-radius: 3px 3px 0 0; transition: height 0.4s ease; cursor: pointer; position: relative; }
+  .trend-bar:hover { background: ${colors.primaryDark}; }
+  .trend-label { font-size: 8px; text-align: center; color: ${colors.textMuted}; margin-top: 4px; }
+  .trend-bar-tooltip { display: none; position: absolute; top: -24px; left: 50%; transform: translateX(-50%); background: ${colors.dark}; color: white; font-size: 11px; padding: 2px 6px; border-radius: 4px; white-space: nowrap; }
+  .trend-bar:hover .trend-bar-tooltip { display: block; }
+  .kpi-subtitle { font-size: 11px; color: ${colors.textMuted}; margin-top: 2px; }
+  .dash-empty { text-align: center; padding: 40px 20px; color: ${colors.textMuted}; font-size: 14px; }
+
   @media (max-width: 600px) {
     .grid-2 { grid-template-columns: 1fr 1fr; gap: 8px; }
     .grid-3 { grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
     .kpi { padding: 14px; }
     .kpi-value { font-size: 28px; }
     .container-wide { padding: 12px; }
+    .dash-grid { grid-template-columns: 1fr; }
+    .bar-label { width: 70px; }
+    .hour-chart, .trend-chart { height: 80px; }
   }
 `;
 
@@ -677,6 +724,123 @@ app.get('/api/buscar-patente/:patente', async (req, res) => {
   } catch (err) {
     console.error('Error buscando patente:', err);
     res.json({ found: false, error: 'Error de consulta' });
+  }
+});
+
+// ==================== DASHBOARD STATS ====================
+app.get('/api/dashboard/stats', async (req, res) => {
+  try {
+    const range = req.query.range || 'today';
+    let fromDate, toDate;
+    const now = new Date();
+    const arNow = new Date(now.toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' }));
+
+    if (range === 'custom') {
+      fromDate = req.query.from || arNow.toISOString().slice(0, 10);
+      toDate = req.query.to || arNow.toISOString().slice(0, 10);
+      // toDate inclusive: add 1 day
+      const td = new Date(toDate);
+      td.setDate(td.getDate() + 1);
+      toDate = td.toISOString().slice(0, 10);
+    } else if (range === 'week') {
+      const dayOfWeek = arNow.getDay() || 7; // lunes=1
+      const monday = new Date(arNow);
+      monday.setDate(arNow.getDate() - dayOfWeek + 1);
+      fromDate = monday.toISOString().slice(0, 10);
+      const tomorrow = new Date(arNow);
+      tomorrow.setDate(arNow.getDate() + 1);
+      toDate = tomorrow.toISOString().slice(0, 10);
+    } else if (range === 'month') {
+      fromDate = arNow.toISOString().slice(0, 8) + '01';
+      const tomorrow = new Date(arNow);
+      tomorrow.setDate(arNow.getDate() + 1);
+      toDate = tomorrow.toISOString().slice(0, 10);
+    } else {
+      // today
+      fromDate = arNow.toISOString().slice(0, 10);
+      const tomorrow = new Date(arNow);
+      tomorrow.setDate(arNow.getDate() + 1);
+      toDate = tomorrow.toISOString().slice(0, 10);
+    }
+
+    // Query 1: Promedios generales
+    const avgResult = await pool.query(
+      `SELECT
+        AVG(EXTRACT(EPOCH FROM (ts_egreso - ts_entrada))) AS avg_predio,
+        AVG(EXTRACT(EPOCH FROM (ts_desatracado - ts_atracado))) AS avg_atraque,
+        AVG(EXTRACT(EPOCH FROM (ts_asignacion - ts_entrada))) AS avg_espera,
+        COUNT(*) AS total
+      FROM turnos
+      WHERE ts_egreso IS NOT NULL AND ts_entrada >= $1 AND ts_entrada < $2`,
+      [fromDate, toDate]
+    );
+
+    // Query 2: Por operación
+    const byOp = await pool.query(
+      `SELECT operation, COUNT(*) AS count,
+        AVG(EXTRACT(EPOCH FROM (ts_egreso - ts_entrada))) AS avg_predio
+      FROM turnos
+      WHERE ts_egreso IS NOT NULL AND ts_entrada >= $1 AND ts_entrada < $2
+      GROUP BY operation ORDER BY count DESC`,
+      [fromDate, toDate]
+    );
+
+    // Query 3: Por nave
+    const byWh = await pool.query(
+      `SELECT warehouse, COUNT(*) AS count,
+        AVG(EXTRACT(EPOCH FROM (ts_egreso - ts_entrada))) AS avg_predio
+      FROM turnos
+      WHERE ts_egreso IS NOT NULL AND ts_entrada >= $1 AND ts_entrada < $2
+      GROUP BY warehouse ORDER BY count DESC`,
+      [fromDate, toDate]
+    );
+
+    // Query 4: Top 10 transportistas
+    const byCarrier = await pool.query(
+      `SELECT carrier, COUNT(*) AS count,
+        AVG(EXTRACT(EPOCH FROM (ts_egreso - ts_entrada))) AS avg_predio
+      FROM turnos
+      WHERE ts_egreso IS NOT NULL AND ts_entrada >= $1 AND ts_entrada < $2
+      GROUP BY carrier ORDER BY count DESC LIMIT 10`,
+      [fromDate, toDate]
+    );
+
+    // Query 5: Distribución horaria
+    const byHour = await pool.query(
+      `SELECT EXTRACT(HOUR FROM ts_entrada) AS hour, COUNT(*) AS count
+      FROM turnos
+      WHERE ts_egreso IS NOT NULL AND ts_entrada >= $1 AND ts_entrada < $2
+      GROUP BY hour ORDER BY hour`,
+      [fromDate, toDate]
+    );
+
+    // Query 6: Tendencia diaria (últimos 30 días)
+    const dailyTrend = await pool.query(
+      `SELECT DATE(ts_entrada) AS day, COUNT(*) AS count
+      FROM turnos
+      WHERE ts_egreso IS NOT NULL AND ts_entrada >= CURRENT_DATE - INTERVAL '30 days'
+      GROUP BY day ORDER BY day`
+    );
+
+    const avg = avgResult.rows[0] || {};
+    res.json({
+      success: true,
+      stats: {
+        avgPredio: parseFloat(avg.avg_predio) || 0,
+        avgAtraque: parseFloat(avg.avg_atraque) || 0,
+        avgEspera: parseFloat(avg.avg_espera) || 0,
+        totalCompleted: parseInt(avg.total) || 0,
+        byOperation: byOp.rows.map(r => ({ operation: r.operation || 'Sin tipo', count: parseInt(r.count), avgPredio: parseFloat(r.avg_predio) || 0 })),
+        byWarehouse: byWh.rows.map(r => ({ warehouse: r.warehouse || 'Sin nave', count: parseInt(r.count), avgPredio: parseFloat(r.avg_predio) || 0 })),
+        byCarrier: byCarrier.rows.map(r => ({ carrier: r.carrier || 'Sin asignar', count: parseInt(r.count), avgPredio: parseFloat(r.avg_predio) || 0 })),
+        byHour: byHour.rows.map(r => ({ hour: parseInt(r.hour), count: parseInt(r.count) })),
+        dailyTrend: dailyTrend.rows.map(r => ({ day: r.day, count: parseInt(r.count) }))
+      },
+      range, fromDate, toDate
+    });
+  } catch (err) {
+    console.error('Error dashboard stats:', err);
+    res.json({ success: false, error: 'Error de consulta' });
   }
 });
 
@@ -1561,28 +1725,48 @@ app.get('/operador', (req, res) => {
           <button class="nav-tab active" onclick="setFilter('PL2')" id="tab-PL2">🏭 PL2</button>
           <button class="nav-tab" onclick="setFilter('PL3')" id="tab-PL3">🏭 PL3</button>
           <button class="nav-tab" onclick="setFilter('TODOS')" id="tab-TODOS">📋 Todos</button>
-        </div>
-        
-        <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:12px; margin-bottom:24px;" id="kpis">
-          <div class="kpi"><div class="kpi-value">-</div><div class="kpi-label">En predio</div></div>
-          <div class="kpi"><div class="kpi-value">-</div><div class="kpi-label">Esperando</div></div>
-          <div class="kpi"><div class="kpi-value">-</div><div class="kpi-label">Atracados</div></div>
-          <div class="kpi"><div class="kpi-value">-</div><div class="kpi-label">Dársenas libres</div></div>
+          <div style="flex:1;"></div>
+          <button class="nav-tab nav-tab-dashboard" onclick="toggleDashboard()" id="tab-DASHBOARD">📊 Dashboard</button>
         </div>
 
-        <div style="display:flex; align-items:center; gap:12px; margin-bottom:12px; flex-wrap:wrap;">
-          <h2 style="margin:0;">Turnos activos</h2>
-          <input type="text" id="searchTurnos" placeholder="Buscar patente o transportista..."
-                 oninput="renderTurnos()"
-                 style="flex:1; min-width:200px; margin:0; padding:10px 14px; font-size:14px; min-height:40px;">
-          <button onclick="toggleViewMode()" id="viewModeBtn" style="background:${colors.bgCard}; border:1px solid ${colors.border}; color:${colors.textSecondary}; padding:8px 14px; border-radius:8px; font-family:'Montserrat',sans-serif; font-size:13px; font-weight:600; cursor:pointer; white-space:nowrap;">📋 Vista tabla</button>
+        <!-- Vista operador (turnos activos) -->
+        <div id="operatorView">
+          <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:12px; margin-bottom:24px;" id="kpis">
+            <div class="kpi"><div class="kpi-value">-</div><div class="kpi-label">En predio</div></div>
+            <div class="kpi"><div class="kpi-value">-</div><div class="kpi-label">Esperando</div></div>
+            <div class="kpi"><div class="kpi-value">-</div><div class="kpi-label">Atracados</div></div>
+            <div class="kpi"><div class="kpi-value">-</div><div class="kpi-label">Dársenas libres</div></div>
+          </div>
+
+          <div style="display:flex; align-items:center; gap:12px; margin-bottom:12px; flex-wrap:wrap;">
+            <h2 style="margin:0;">Turnos activos</h2>
+            <input type="text" id="searchTurnos" placeholder="Buscar patente o transportista..."
+                   oninput="renderTurnos()"
+                   style="flex:1; min-width:200px; margin:0; padding:10px 14px; font-size:14px; min-height:40px;">
+            <button onclick="toggleViewMode()" id="viewModeBtn" style="background:${colors.bgCard}; border:1px solid ${colors.border}; color:${colors.textSecondary}; padding:8px 14px; border-radius:8px; font-family:'Montserrat',sans-serif; font-size:13px; font-weight:600; cursor:pointer; white-space:nowrap;">📋 Vista tabla</button>
+          </div>
+          <div id="turnos"></div>
+
+          <h2 style="margin-top: 24px;">Estado de dársenas</h2>
+          <div id="docks"></div>
+
+          <p class="refresh-notice">🔄 Actualizando automáticamente cada 5 segundos</p>
         </div>
-        <div id="turnos"></div>
-        
-        <h2 style="margin-top: 24px;">Estado de dársenas</h2>
-        <div id="docks"></div>
-        
-        <p class="refresh-notice">🔄 Actualizando automáticamente cada 5 segundos</p>
+
+        <!-- Vista dashboard (KPIs históricos) -->
+        <div id="dashboardView" style="display:none;">
+          <div class="date-range-bar">
+            <button class="range-btn active" id="range-today" onclick="loadDashboardData('today')">Hoy</button>
+            <button class="range-btn" id="range-week" onclick="loadDashboardData('week')">Semana</button>
+            <button class="range-btn" id="range-month" onclick="loadDashboardData('month')">Mes</button>
+            <button class="range-btn" id="range-custom" onclick="showCustomRange()">Personalizado</button>
+            <input type="date" id="dash-from" style="display:none; width:auto; min-height:36px; padding:6px 10px; font-size:13px; border:1px solid ${colors.border}; border-radius:8px; font-family:'Montserrat',sans-serif;" onchange="loadDashboardData('custom')">
+            <input type="date" id="dash-to" style="display:none; width:auto; min-height:36px; padding:6px 10px; font-size:13px; border:1px solid ${colors.border}; border-radius:8px; font-family:'Montserrat',sans-serif;" onchange="loadDashboardData('custom')">
+          </div>
+          <div id="dashboardContent">
+            <div class="dash-empty">⏳ Cargando datos...</div>
+          </div>
+        </div>
       </div>
       
       <!-- Modal detalle -->
@@ -1604,6 +1788,9 @@ app.get('/operador', (req, res) => {
         let activeSelect = null;
         let viewMode = 'cards'; // 'cards' o 'table'
         let collapsedGroups = {};
+        let dashboardMode = false;
+        let dashboardRange = 'today';
+        let dashboardData = null;
         
         // Detectar cuando alguien está usando un select
         document.addEventListener('focus', (e) => {
@@ -1635,8 +1822,15 @@ app.get('/operador', (req, res) => {
         }
         
         function setFilter(filter) {
+          // Si estamos en dashboard, salir de él
+          if (dashboardMode) {
+            dashboardMode = false;
+            document.getElementById('operatorView').style.display = '';
+            document.getElementById('dashboardView').style.display = 'none';
+            document.getElementById('tab-DASHBOARD').classList.remove('active');
+          }
           currentFilter = filter;
-          document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+          document.querySelectorAll('.nav-tab:not(.nav-tab-dashboard)').forEach(t => t.classList.remove('active'));
           document.getElementById('tab-' + filter).classList.add('active');
           renderTurnos();
           renderKPIs();
@@ -2072,6 +2266,166 @@ app.get('/operador', (req, res) => {
         function formatDateTime(ts) {
           if (!ts) return '--:--';
           return new Date(ts).toLocaleString('es-AR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+        }
+
+        // ========== DASHBOARD FUNCTIONS ==========
+        function toggleDashboard() {
+          dashboardMode = !dashboardMode;
+          if (dashboardMode) {
+            document.getElementById('operatorView').style.display = 'none';
+            document.getElementById('dashboardView').style.display = '';
+            document.querySelectorAll('.nav-tab:not(.nav-tab-dashboard)').forEach(t => t.classList.remove('active'));
+            document.getElementById('tab-DASHBOARD').classList.add('active');
+            if (!dashboardData) loadDashboardData();
+          } else {
+            document.getElementById('operatorView').style.display = '';
+            document.getElementById('dashboardView').style.display = 'none';
+            document.getElementById('tab-DASHBOARD').classList.remove('active');
+            document.getElementById('tab-' + currentFilter).classList.add('active');
+          }
+        }
+
+        function showCustomRange() {
+          dashboardRange = 'custom';
+          document.querySelectorAll('.range-btn').forEach(b => b.classList.remove('active'));
+          document.getElementById('range-custom').classList.add('active');
+          document.getElementById('dash-from').style.display = '';
+          document.getElementById('dash-to').style.display = '';
+          const today = new Date();
+          const weekAgo = new Date(today);
+          weekAgo.setDate(today.getDate() - 7);
+          document.getElementById('dash-from').value = weekAgo.toISOString().slice(0,10);
+          document.getElementById('dash-to').value = today.toISOString().slice(0,10);
+          loadDashboardData('custom');
+        }
+
+        async function loadDashboardData(range) {
+          if (range) dashboardRange = range;
+          document.querySelectorAll('.range-btn').forEach(b => b.classList.remove('active'));
+          const activeBtn = document.getElementById('range-' + dashboardRange);
+          if (activeBtn) activeBtn.classList.add('active');
+          if (dashboardRange !== 'custom') {
+            document.getElementById('dash-from').style.display = 'none';
+            document.getElementById('dash-to').style.display = 'none';
+          }
+          let url = '/api/dashboard/stats?range=' + dashboardRange;
+          if (dashboardRange === 'custom') {
+            const from = document.getElementById('dash-from').value;
+            const to = document.getElementById('dash-to').value;
+            if (from && to) url += '&from=' + from + '&to=' + to;
+          }
+          document.getElementById('dashboardContent').innerHTML = '<div class="dash-empty">⏳ Cargando datos...</div>';
+          try {
+            const res = await fetch(url);
+            const data = await res.json();
+            if (data.success) {
+              dashboardData = data.stats;
+              renderDashboard();
+            } else {
+              document.getElementById('dashboardContent').innerHTML = '<div class="dash-empty">❌ Error al cargar datos</div>';
+            }
+          } catch(e) {
+            document.getElementById('dashboardContent').innerHTML = '<div class="dash-empty">❌ Error de conexión</div>';
+          }
+        }
+
+        function formatDuration(secs) {
+          if (!secs || secs <= 0) return '--';
+          const h = Math.floor(secs / 3600);
+          const m = Math.floor((secs % 3600) / 60);
+          if (h > 0) return h + 'h ' + m + 'm';
+          return m + ' min';
+        }
+
+        function renderDashboard() {
+          const d = dashboardData;
+          if (!d) return;
+          let html = '';
+
+          // KPI cards
+          html += '<div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:12px; margin-bottom:16px;">';
+          html += '<div class="kpi"><div class="kpi-value">' + formatDuration(d.avgPredio) + '</div><div class="kpi-label">Prom. en predio</div></div>';
+          html += '<div class="kpi"><div class="kpi-value">' + formatDuration(d.avgAtraque) + '</div><div class="kpi-label">Prom. atraque</div></div>';
+          html += '<div class="kpi"><div class="kpi-value">' + formatDuration(d.avgEspera) + '</div><div class="kpi-label">Prom. espera</div></div>';
+          html += '<div class="kpi"><div class="kpi-value" style="color:${colors.primary};">' + d.totalCompleted + '</div><div class="kpi-label">Camiones procesados</div></div>';
+          html += '</div>';
+
+          if (d.totalCompleted === 0) {
+            html += '<div class="dash-empty">📭 No hay datos completados en este período</div>';
+            document.getElementById('dashboardContent').innerHTML = html;
+            return;
+          }
+
+          // Por operación + Por nave
+          html += '<div class="dash-grid">';
+          html += '<div class="dash-section"><h3>📦 Por operación</h3>';
+          const maxOp = Math.max(...d.byOperation.map(o => o.count), 1);
+          const opColors = { 'Descarga': 'bar-fill-primary', 'Colecta': 'bar-fill-orange', 'Carga': 'bar-fill-green' };
+          d.byOperation.forEach(o => {
+            const pct = (o.count / maxOp * 100).toFixed(0);
+            const cls = opColors[o.operation] || 'bar-fill-primary';
+            html += '<div class="bar-row"><div class="bar-label">' + (o.operation || 'S/T') + '</div>';
+            html += '<div class="bar-track"><div class="bar-fill ' + cls + '" style="width:' + pct + '%;"></div></div>';
+            html += '<div class="bar-value">' + o.count + ' <span style="font-size:10px;color:${colors.textMuted};">(' + formatDuration(o.avgPredio) + ')</span></div></div>';
+          });
+          html += '</div>';
+
+          html += '<div class="dash-section"><h3>🏭 Por nave</h3>';
+          const maxWh = Math.max(...d.byWarehouse.map(w => w.count), 1);
+          d.byWarehouse.forEach(w => {
+            const pct = (w.count / maxWh * 100).toFixed(0);
+            const cls = w.warehouse === 'PL3' ? 'bar-fill-orange' : 'bar-fill-primary';
+            html += '<div class="bar-row"><div class="bar-label">' + (w.warehouse || 'S/N') + '</div>';
+            html += '<div class="bar-track"><div class="bar-fill ' + cls + '" style="width:' + pct + '%;"></div></div>';
+            html += '<div class="bar-value">' + w.count + ' <span style="font-size:10px;color:${colors.textMuted};">(' + formatDuration(w.avgPredio) + ')</span></div></div>';
+          });
+          html += '</div></div>';
+
+          // Top transportistas
+          if (d.byCarrier.length > 0) {
+            html += '<div class="dash-grid"><div class="dash-section dash-full"><h3>🚛 Top transportistas</h3>';
+            const maxCr = Math.max(...d.byCarrier.map(c => c.count), 1);
+            d.byCarrier.forEach((c, i) => {
+              const pct = (c.count / maxCr * 100).toFixed(0);
+              html += '<div class="bar-row"><div class="bar-label" title="' + c.carrier + '">' + c.carrier + '</div>';
+              html += '<div class="bar-track"><div class="bar-fill bar-fill-primary" style="width:' + pct + '%; opacity:' + (1 - i * 0.06) + ';"></div></div>';
+              html += '<div class="bar-value">' + c.count + ' <span style="font-size:10px;color:${colors.textMuted};">(' + formatDuration(c.avgPredio) + ')</span></div></div>';
+            });
+            html += '</div></div>';
+          }
+
+          // Hora pico + Tendencia
+          html += '<div class="dash-grid">';
+          html += '<div class="dash-section"><h3>⏰ Distribución horaria</h3><div class="hour-chart">';
+          const maxHour = Math.max(...d.byHour.map(h => h.count), 1);
+          const hourMap = {};
+          d.byHour.forEach(h => { hourMap[h.hour] = h.count; });
+          for (let h = 0; h < 24; h++) {
+            const count = hourMap[h] || 0;
+            const pct = count > 0 ? Math.max((count / maxHour * 100), 5) : 0;
+            html += '<div class="hour-bar-wrap"><div class="hour-bar" style="height:' + pct + '%;"><span class="hour-bar-tooltip">' + h + ':00 - ' + count + '</span></div>';
+            html += '<div class="hour-label">' + (h % 3 === 0 ? h : '') + '</div></div>';
+          }
+          html += '</div></div>';
+
+          html += '<div class="dash-section"><h3>📈 Tendencia diaria (30d)</h3>';
+          if (d.dailyTrend.length > 0) {
+            html += '<div class="trend-chart">';
+            const maxDay = Math.max(...d.dailyTrend.map(t => t.count), 1);
+            d.dailyTrend.forEach((t, i) => {
+              const pct = Math.max((t.count / maxDay * 100), 5);
+              const dayLabel = new Date(t.day).toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit' });
+              const showLabel = i === 0 || i === d.dailyTrend.length - 1 || i % 5 === 0;
+              html += '<div class="trend-bar-wrap"><div class="trend-bar" style="height:' + pct + '%;"><span class="trend-bar-tooltip">' + dayLabel + ': ' + t.count + '</span></div>';
+              html += '<div class="trend-label">' + (showLabel ? dayLabel : '') + '</div></div>';
+            });
+            html += '</div>';
+          } else {
+            html += '<div class="dash-empty">Sin datos</div>';
+          }
+          html += '</div></div>';
+
+          document.getElementById('dashboardContent').innerHTML = html;
         }
 
         loadData();
