@@ -291,12 +291,12 @@ app.post('/api/entrada', async (req, res) => {
   if (!operation) return res.json({ success: false, error: 'Seleccioná el tipo de operación' });
   
   try {
-    // Buscar turno activo existente
+    // Buscar turno activo existente con mismo truck + trip_number
     const existing = await pool.query(
-      "SELECT * FROM turnos WHERE truck = $1 AND status != 'EGRESADO'",
-      [truck.toUpperCase()]
+      "SELECT * FROM turnos WHERE truck = $1 AND (trip_number = $2 OR (trip_number IS NULL AND $2 IS NULL)) AND status != 'EGRESADO'",
+      [truck.toUpperCase(), tripNumber || null]
     );
-    
+
     if (existing.rows.length > 0) {
       return res.json({ success: true, id: existing.rows[0].turno_id, existing: true });
     }
@@ -310,6 +310,67 @@ app.post('/api/entrada', async (req, res) => {
     );
     
     res.json({ success: true, id: turnoId, existing: false });
+  } catch (err) {
+    console.error(err);
+    res.json({ success: false, error: err.message });
+  }
+});
+
+// Registrar múltiples viajes para la misma patente
+app.post('/api/entrada-multiple', async (req, res) => {
+  const { truck, carrier, operation, trips } = req.body;
+  if (!truck) return res.json({ success: false, error: 'Patente requerida' });
+  if (!carrier) return res.json({ success: false, error: 'Seleccioná un transportista' });
+  if (!operation) return res.json({ success: false, error: 'Seleccioná el tipo de operación' });
+  if (!trips || !Array.isArray(trips) || trips.length === 0) {
+    return res.json({ success: false, error: 'No hay viajes para registrar' });
+  }
+
+  try {
+    const created = [];
+    const skipped = [];
+
+    for (const trip of trips) {
+      const tripNumber = trip.tripNumber || null;
+      const warehouse = trip.warehouse || '';
+
+      // Verificar si ya existe turno con mismo truck + trip_number
+      const existing = await pool.query(
+        "SELECT turno_id FROM turnos WHERE truck = $1 AND trip_number = $2 AND status != 'EGRESADO'",
+        [truck.toUpperCase(), tripNumber]
+      );
+
+      if (existing.rows.length > 0) {
+        skipped.push({ turnoId: existing.rows[0].turno_id, tripNumber });
+        continue;
+      }
+
+      const turnoId = await generarId();
+      await pool.query(
+        `INSERT INTO turnos (turno_id, truck, carrier, trip_number, warehouse, operation, type, status, ts_entrada)
+         VALUES ($1, $2, $3, $4, $5, $6, 'INBOUND', 'ESPERANDO_ASIGNACION', CURRENT_TIMESTAMP)`,
+        [turnoId, truck.toUpperCase(), carrier, tripNumber, warehouse, operation]
+      );
+      created.push(turnoId);
+    }
+
+    const firstId = created.length > 0 ? created[0] : (skipped.length > 0 ? skipped[0].turnoId : null);
+    res.json({ success: true, created, skipped, firstId, patente: truck.toUpperCase() });
+  } catch (err) {
+    console.error(err);
+    res.json({ success: false, error: err.message });
+  }
+});
+
+// Obtener turnos activos por patente
+app.get('/api/turnos-by-patente/:patente', async (req, res) => {
+  try {
+    const patente = (req.params.patente || '').toUpperCase().replace(/[-\s]/g, '');
+    const result = await pool.query(
+      "SELECT * FROM turnos WHERE truck = $1 AND status != 'EGRESADO' ORDER BY ts_entrada DESC",
+      [patente]
+    );
+    res.json({ success: true, turnos: result.rows });
   } catch (err) {
     console.error(err);
     res.json({ success: false, error: err.message });
@@ -470,6 +531,45 @@ const GOOGLE_SHEET_CSV_URL = 'https://docs.google.com/spreadsheets/d/1QwWUe34Yn0
 
 let sheetCache = { data: null, ts: 0 };
 
+// Helper: verifica si una fecha del sheet corresponde a hoy (timezone Argentina)
+function isToday(fechaStr) {
+  if (!fechaStr) return false;
+  let day, month, year;
+  const clean = fechaStr.trim();
+  if (clean.includes('/')) {
+    const parts = clean.split('/');
+    day = parseInt(parts[0], 10);
+    month = parseInt(parts[1], 10);
+    year = parseInt(parts[2], 10);
+    if (year < 100) year += 2000;
+  } else if (clean.includes('-')) {
+    const parts = clean.split('-');
+    if (parts[0].length === 4) {
+      year = parseInt(parts[0], 10);
+      month = parseInt(parts[1], 10);
+      day = parseInt(parts[2], 10);
+    } else {
+      day = parseInt(parts[0], 10);
+      month = parseInt(parts[1], 10);
+      year = parseInt(parts[2], 10);
+      if (year < 100) year += 2000;
+    }
+  } else {
+    return false;
+  }
+  if (isNaN(day) || isNaN(month) || isNaN(year)) return false;
+  const now = new Date();
+  const ar = new Date(now.toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' }));
+  return ar.getDate() === day && (ar.getMonth() + 1) === month && ar.getFullYear() === year;
+}
+
+// Helper: mapea deposito del sheet a warehouse válido (PL2/PL3)
+const VALID_WAREHOUSES = ['PL2', 'PL3'];
+function mapDeposito(deposito) {
+  const upper = (deposito || '').toUpperCase().trim();
+  return VALID_WAREHOUSES.includes(upper) ? upper : null;
+}
+
 async function fetchSheetData() {
   // Cache por 5 minutos
   if (sheetCache.data && (Date.now() - sheetCache.ts) < 300000) {
@@ -491,7 +591,6 @@ function parseCSV(text) {
   const lines = text.split('\n');
   if (lines.length < 2) return [];
 
-  // Parsear headers
   const headers = parseCSVLine(lines[0]).map(h => h.trim().toLowerCase().replace(/"/g, ''));
   const results = [];
 
@@ -539,17 +638,21 @@ app.get('/api/buscar-patente/:patente', async (req, res) => {
     }
 
     const rows = await fetchSheetData();
-    // Buscar coincidencia normalizando la patente (sin guiones ni espacios)
-    const match = rows.find(r => {
+    // Filtrar: misma patente + fecha de hoy
+    const matches = rows.filter(r => {
       const sheetPatente = (r.patente || '').toUpperCase().replace(/[-\s]/g, '');
-      return sheetPatente === patente;
+      return sheetPatente === patente && isToday(r.fecha);
     });
 
-    if (match) {
-      // Buscar el campo "numero de viaje" o "viaje"
-      const tripNumber = match['numero de viaje'] || match['viaje'] || match['numero_de_viaje'] || '';
-      const transporte = match['transporte'] || match['transportista'] || '';
-      res.json({ found: true, tripNumber, transporte, patente: match.patente || '' });
+    if (matches.length > 0) {
+      const trips = matches.map(m => {
+        const tripNumber = m['numero de viaje'] || m['viaje'] || m['numero_de_viaje'] || '';
+        const transporte = m['transporte'] || m['transportista'] || '';
+        const deposito = (m['deposito'] || m['destino'] || '').toUpperCase().trim();
+        const warehouse = mapDeposito(deposito);
+        return { tripNumber, transporte, deposito, warehouse: warehouse || deposito };
+      });
+      res.json({ found: true, trips, patente });
     } else {
       res.json({ found: false });
     }
@@ -653,6 +756,12 @@ app.get('/entrada', (req, res) => {
                  style="text-transform: uppercase; font-family: monospace; font-size: 24px; text-align: center;">
           <div id="patenteStatus" style="display:none; font-size:12px; margin:-4px 0 8px 0; padding:6px 12px; border-radius:6px; text-align:left;"></div>
 
+          <!-- Panel viajes encontrados (oculto por defecto) -->
+          <div id="tripsFound" style="display:none; margin-bottom:12px;">
+            <label>VIAJES ENCONTRADOS PARA HOY</label>
+            <div id="tripsList"></div>
+          </div>
+
           <label>TRANSPORTISTA *</label>
           <div style="position: relative;">
             <input type="text" id="carrierSearch" placeholder="Escribí para buscar transportista..." autocomplete="off"
@@ -662,27 +771,39 @@ app.get('/entrada', (req, res) => {
                  background:${colors.bgCard}; border:1px solid ${colors.border}; border-top:none; border-radius:0 0 12px 12px;
                  max-height:200px; overflow-y:auto; box-shadow: 0 8px 24px ${colors.shadow};"></div>
           </div>
-          
-          <label>N° DE VIAJE (opcional)</label>
-          <input type="text" id="tripNumber" placeholder="Ej: 123456" maxlength="20">
-          
-          <div class="row-2">
-            <div>
-              <label>DESTINO *</label>
-              <select id="warehouse">
-                <option value="" disabled selected>Nave...</option>
-                <option value="PL2">PL2</option>
-                <option value="PL3">PL3</option>
-              </select>
+
+          <div id="manualFields">
+            <label>N° DE VIAJE (opcional)</label>
+            <input type="text" id="tripNumber" placeholder="Ej: 123456" maxlength="20">
+
+            <div class="row-2">
+              <div>
+                <label>DESTINO *</label>
+                <select id="warehouse">
+                  <option value="" disabled selected>Nave...</option>
+                  <option value="PL2">PL2</option>
+                  <option value="PL3">PL3</option>
+                </select>
+              </div>
+              <div>
+                <label>OPERACIÓN *</label>
+                <select id="operation">
+                  <option value="" disabled selected>Tipo...</option>
+                  <option value="Descarga">Descarga</option>
+                  <option value="Colecta">Colecta</option>
+                </select>
+              </div>
             </div>
-            <div>
-              <label>OPERACIÓN *</label>
-              <select id="operation">
-                <option value="" disabled selected>Tipo...</option>
-                <option value="Descarga">Descarga</option>
-                <option value="Colecta">Colecta</option>
-              </select>
-            </div>
+          </div>
+
+          <!-- Operación visible en modo multi-viaje -->
+          <div id="multiOperation" style="display:none;">
+            <label>OPERACIÓN *</label>
+            <select id="operationMulti">
+              <option value="" disabled selected>Tipo...</option>
+              <option value="Descarga">Descarga</option>
+              <option value="Colecta">Colecta</option>
+            </select>
           </div>
           
           <button class="btn btn-primary" onclick="registrar()" id="btnSubmit" style="margin-top: 16px;">
@@ -749,45 +870,90 @@ app.get('/entrada', (req, res) => {
           this.value = this.value.toUpperCase();
         });
 
-        // Auto-búsqueda de patente en Google Sheets
+        // Auto-búsqueda de patente en Google Sheets (multi-viaje)
         let patenteSearchTimeout = null;
+        window._foundTrips = null;
+
+        function setMultiTripMode(trips) {
+          window._foundTrips = trips;
+          document.getElementById('manualFields').style.display = 'none';
+          document.getElementById('multiOperation').style.display = 'block';
+          document.getElementById('tripsFound').style.display = 'block';
+
+          let html = '';
+          trips.forEach((trip, idx) => {
+            const naveBadge = trip.warehouse || trip.deposito || '?';
+            const isValid = ['PL2','PL3'].includes((trip.warehouse || '').toUpperCase());
+            const badgeColor = isValid ? '#16a34a' : '#d97706';
+            const badgeBg = isValid ? '#f0fdf4' : '#fffbeb';
+            const badgeBorder = isValid ? '#bbf7d0' : '#fde68a';
+            html += '<div style="display:flex; align-items:center; gap:10px; padding:10px 14px; background:' + badgeBg + '; border:1px solid ' + badgeBorder + '; border-radius:8px; margin-bottom:6px;">';
+            html += '<span style="font-size:18px;">📦</span>';
+            html += '<div style="flex:1; text-align:left;">';
+            html += '<div style="font-weight:600; font-size:14px;">Viaje ' + (trip.tripNumber || 'S/N') + '</div>';
+            html += '<div style="font-size:12px; color:${colors.textMuted};">' + (trip.transporte || '') + '</div>';
+            html += '</div>';
+            html += '<span style="background:' + badgeBg + '; color:' + badgeColor + '; border:1px solid ' + badgeBorder + '; padding:4px 10px; border-radius:6px; font-weight:700; font-size:13px;">' + naveBadge + '</span>';
+            html += '</div>';
+          });
+          document.getElementById('tripsList').innerHTML = html;
+
+          // Auto-completar transportista si hay info
+          const firstTransporte = trips.find(t => t.transporte);
+          if (firstTransporte) {
+            searchInput.value = firstTransporte.transporte;
+            carrierHidden.value = firstTransporte.transporte;
+          }
+        }
+
+        function setManualMode() {
+          window._foundTrips = null;
+          document.getElementById('manualFields').style.display = 'block';
+          document.getElementById('multiOperation').style.display = 'none';
+          document.getElementById('tripsFound').style.display = 'none';
+          document.getElementById('tripsList').innerHTML = '';
+        }
+
         document.getElementById('truck').addEventListener('input', function() {
           clearTimeout(patenteSearchTimeout);
           const val = this.value.trim().replace(/[-\\s]/g, '');
           const statusEl = document.getElementById('patenteStatus');
+
           if (val.length < 5) {
             statusEl.style.display = 'none';
+            setManualMode();
             return;
           }
+
           statusEl.style.display = 'block';
           statusEl.style.background = '#eff6ff';
           statusEl.style.color = '#2563eb';
           statusEl.style.border = '1px solid #bfdbfe';
-          statusEl.innerHTML = '🔍 Buscando patente en sistema...';
+          statusEl.innerHTML = '🔍 Buscando viajes de hoy para esta patente...';
 
           patenteSearchTimeout = setTimeout(async () => {
             try {
               const res = await fetch('/api/buscar-patente/' + encodeURIComponent(val));
               const data = await res.json();
-              if (data.found && data.tripNumber) {
-                document.getElementById('tripNumber').value = data.tripNumber;
+
+              if (data.found && data.trips && data.trips.length > 0) {
+                const count = data.trips.length;
                 statusEl.style.background = '#f0fdf4';
                 statusEl.style.color = '#16a34a';
                 statusEl.style.border = '1px solid #bbf7d0';
-                statusEl.innerHTML = '✅ Viaje encontrado: <strong>' + data.tripNumber + '</strong>' + (data.transporte ? ' (' + data.transporte + ')' : '');
-              } else if (data.found) {
+                const naves = [...new Set(data.trips.map(t => t.warehouse || t.deposito))].join(', ');
+                statusEl.innerHTML = '✅ ' + count + ' viaje' + (count > 1 ? 's' : '') + ' encontrado' + (count > 1 ? 's' : '') + ' para hoy (' + naves + ')';
+                setMultiTripMode(data.trips);
+              } else {
                 statusEl.style.background = '#fffbeb';
                 statusEl.style.color = '#d97706';
                 statusEl.style.border = '1px solid #fde68a';
-                statusEl.innerHTML = '⚠️ Patente encontrada pero sin N° de viaje asignado';
-              } else {
-                statusEl.style.background = '#fef2f2';
-                statusEl.style.color = '#dc2626';
-                statusEl.style.border = '1px solid #fecaca';
-                statusEl.innerHTML = '❌ Patente no encontrada en el listado de viajes';
+                statusEl.innerHTML = '⚠️ Sin viajes programados para hoy. Completá los datos manualmente.';
+                setManualMode();
               }
             } catch(e) {
               statusEl.style.display = 'none';
+              setManualMode();
             }
           }, 600);
         });
@@ -797,39 +963,81 @@ app.get('/entrada', (req, res) => {
         async function registrar() {
           const truck = document.getElementById('truck').value.trim();
           const carrier = document.getElementById('carrier').value;
-          const tripNumber = document.getElementById('tripNumber').value.trim();
-          const warehouse = document.getElementById('warehouse').value;
-          const operation = document.getElementById('operation').value;
-          
+
           clearFieldErrors();
           let hasError = false;
           if (!truck) { markFieldError('truck', 'Ingresá tu patente'); hasError = true; }
           if (!carrier) { markFieldError('carrierSearch', 'Seleccioná un transportista'); hasError = true; }
-          if (!warehouse) { markFieldError('warehouse', 'Seleccioná la nave'); hasError = true; }
-          if (!operation) { markFieldError('operation', 'Seleccioná la operación'); hasError = true; }
-          if (hasError) return;
-          
-          document.getElementById('btnSubmit').disabled = true;
-          document.getElementById('btnSubmit').innerHTML = '⏳ Procesando...';
-          
-          try {
-            const res = await fetch('/api/entrada', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ truck, carrier, tripNumber, warehouse, operation })
-            });
-            const data = await res.json();
-            
-            if (data.success) {
-              showSuccess(data.existing ? '✅ Ya tenés un turno activo' : '✅ ¡Registrado correctamente!');
-              setTimeout(() => { window.location.href = '/turno/' + data.id; }, 1500);
-            } else {
-              showError(data.error);
+
+          if (window._foundTrips && window._foundTrips.length > 0) {
+            // === MODO MULTI-VIAJE ===
+            const operation = document.getElementById('operationMulti').value;
+            if (!operation) { markFieldError('operationMulti', 'Seleccioná la operación'); hasError = true; }
+            if (hasError) return;
+
+            document.getElementById('btnSubmit').disabled = true;
+            document.getElementById('btnSubmit').innerHTML = '⏳ Registrando ' + window._foundTrips.length + ' viaje(s)...';
+
+            try {
+              const trips = window._foundTrips.map(t => ({
+                tripNumber: t.tripNumber || '',
+                warehouse: t.warehouse || t.deposito || ''
+              }));
+              const res = await fetch('/api/entrada-multiple', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ truck, carrier, operation, trips })
+              });
+              const data = await res.json();
+
+              if (data.success) {
+                const totalCreated = data.created.length;
+                const totalSkipped = data.skipped.length;
+                let msg = '✅ ' + totalCreated + ' viaje(s) registrado(s)';
+                if (totalSkipped > 0) msg += ' (' + totalSkipped + ' ya existían)';
+                showSuccess(msg);
+                if (data.firstId) {
+                  setTimeout(() => { window.location.href = '/turno/' + data.firstId; }, 1500);
+                }
+              } else {
+                showError(data.error);
+                resetBtn();
+              }
+            } catch(e) {
+              showError('Error de conexión');
               resetBtn();
             }
-          } catch(e) {
-            showError('Error de conexión');
-            resetBtn();
+          } else {
+            // === MODO MANUAL (sin viajes del sheet) ===
+            const tripNumber = document.getElementById('tripNumber').value.trim();
+            const warehouse = document.getElementById('warehouse').value;
+            const operation = document.getElementById('operation').value;
+            if (!warehouse) { markFieldError('warehouse', 'Seleccioná la nave'); hasError = true; }
+            if (!operation) { markFieldError('operation', 'Seleccioná la operación'); hasError = true; }
+            if (hasError) return;
+
+            document.getElementById('btnSubmit').disabled = true;
+            document.getElementById('btnSubmit').innerHTML = '⏳ Procesando...';
+
+            try {
+              const res = await fetch('/api/entrada', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ truck, carrier, tripNumber, warehouse, operation })
+              });
+              const data = await res.json();
+
+              if (data.success) {
+                showSuccess(data.existing ? '✅ Ya tenés un turno activo' : '✅ ¡Registrado correctamente!');
+                setTimeout(() => { window.location.href = '/turno/' + data.id; }, 1500);
+              } else {
+                showError(data.error);
+                resetBtn();
+              }
+            } catch(e) {
+              showError('Error de conexión');
+              resetBtn();
+            }
           }
         }
         
