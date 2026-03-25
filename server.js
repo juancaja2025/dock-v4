@@ -490,7 +490,19 @@ app.post('/api/dock/:dockId', async (req, res) => {
         "UPDATE turnos SET status = 'DESATRACADO', dock = '', ts_desatracado = CURRENT_TIMESTAMP WHERE turno_id = $1",
         [t.turno_id]
       );
-      return res.json({ success: true, action: 'desatracado', truck: t.truck });
+      // Buscar turno hermano con dársena asignada (flujo multi-nave)
+      let nextDock = null;
+      try {
+        const siblings = await pool.query(
+          "SELECT * FROM turnos WHERE truck = $1 AND turno_id != $2 AND status IN ('DARSENA_ASIGNADA', 'ESPERANDO_ASIGNACION') ORDER BY status ASC LIMIT 1",
+          [t.truck, t.turno_id]
+        );
+        if (siblings.rows.length > 0) {
+          const s = siblings.rows[0];
+          nextDock = { dock: s.dock || null, warehouse: s.warehouse, tripNumber: s.trip_number, turnoId: s.turno_id };
+        }
+      } catch(e) { /* ignorar */ }
+      return res.json({ success: true, action: 'desatracado', truck: t.truck, nextDock });
     } else {
       return res.json({ success: false, error: 'Estado no válido: ' + t.status });
     }
@@ -645,14 +657,20 @@ app.get('/api/buscar-patente/:patente', async (req, res) => {
     });
 
     if (matches.length > 0) {
-      const trips = matches.map(m => {
-        const tripNumber = m['numero de viaje'] || m['viaje'] || m['numero_de_viaje'] || '';
-        const transporte = m['transporte'] || m['transportista'] || '';
-        const deposito = (m['deposito'] || m['destino'] || '').toUpperCase().trim();
-        const warehouse = mapDeposito(deposito);
-        return { tripNumber, transporte, deposito, warehouse: warehouse || deposito };
-      });
-      res.json({ found: true, trips, patente });
+      const trips = matches
+        .map(m => {
+          const tripNumber = m['numero de viaje'] || m['viaje'] || m['numero_de_viaje'] || '';
+          const transporte = m['transporte'] || m['transportista'] || '';
+          const deposito = (m['deposito'] || m['destino'] || '').toUpperCase().trim();
+          const warehouse = mapDeposito(deposito);
+          return { tripNumber, transporte, deposito, warehouse };
+        })
+        .filter(t => t.warehouse); // Solo PL2 y PL3
+      if (trips.length > 0) {
+        res.json({ found: true, trips, patente });
+      } else {
+        res.json({ found: false });
+      }
     } else {
       res.json({ found: false });
     }
@@ -791,6 +809,7 @@ app.get('/entrada', (req, res) => {
                   <option value="" disabled selected>Tipo...</option>
                   <option value="Descarga">Descarga</option>
                   <option value="Colecta">Colecta</option>
+                  <option value="Carga">Carga</option>
                 </select>
               </div>
             </div>
@@ -803,6 +822,7 @@ app.get('/entrada', (req, res) => {
               <option value="" disabled selected>Tipo...</option>
               <option value="Descarga">Descarga</option>
               <option value="Colecta">Colecta</option>
+              <option value="Carga">Carga</option>
             </select>
           </div>
           
@@ -1105,14 +1125,24 @@ app.get('/turno/:id', (req, res) => {
       
       <script>
         const turnoId = '${req.params.id}';
-        
+        let siblingTurnos = [];
+
         async function loadTurno() {
           try {
             const res = await fetch('/api/turno/' + turnoId);
             const data = await res.json();
-            
+
             if (data.success) {
-              renderTurno(data.turno);
+              const t = data.turno;
+              // Buscar turnos hermanos (misma patente, distinto turno)
+              try {
+                const sibRes = await fetch('/api/turnos-by-patente/' + encodeURIComponent(t.truck));
+                const sibData = await sibRes.json();
+                siblingTurnos = (sibData.turnos || []).filter(s => s.turno_id !== turnoId);
+              } catch(e) {
+                siblingTurnos = [];
+              }
+              renderTurno(t);
             } else {
               document.getElementById('content').innerHTML = '<div class="error">Turno no encontrado</div>';
             }
@@ -1120,34 +1150,96 @@ app.get('/turno/:id', (req, res) => {
             document.getElementById('content').innerHTML = '<div class="error">Error de conexión</div>';
           }
         }
-        
+
         function renderTurno(t) {
-          const statusText = {
-            'ESPERANDO_ASIGNACION': '⏳ Esperando asignación de dársena',
-            'DARSENA_ASIGNADA': '📍 Dirigite a la dársena ' + t.dock,
-            'ATRACADO': '🔄 Operación en curso en ' + t.dock,
-            'DESATRACADO': '✅ Operación finalizada. Dirigite a la salida',
-            'EGRESADO': '👋 ¡Hasta pronto!'
-          };
-          
-          const iconClass = t.status === 'DESATRACADO' || t.status === 'EGRESADO' ? 'icon-green' : 'icon-primary';
-          
+          // Buscar si hay un turno hermano con dársena asignada pendiente
+          const nextSibling = siblingTurnos.find(s =>
+            s.status === 'DARSENA_ASIGNADA' || s.status === 'ESPERANDO_ASIGNACION'
+          );
+
+          let statusMsg = '';
+          if (t.status === 'ESPERANDO_ASIGNACION') {
+            statusMsg = '⏳ Esperando asignación de dársena';
+          } else if (t.status === 'DARSENA_ASIGNADA') {
+            statusMsg = '📍 Dirigite a la dársena ' + t.dock;
+          } else if (t.status === 'ATRACADO') {
+            statusMsg = '🔄 Operación en curso en ' + t.dock;
+          } else if (t.status === 'DESATRACADO' && nextSibling && nextSibling.dock) {
+            statusMsg = '📍 Ahora dirigite a la dársena ' + nextSibling.dock + ' (' + (nextSibling.warehouse || '') + ')';
+          } else if (t.status === 'DESATRACADO' && nextSibling && !nextSibling.dock) {
+            statusMsg = '⏳ Esperando asignación de dársena para ' + (nextSibling.warehouse || 'otra nave');
+          } else if (t.status === 'DESATRACADO') {
+            statusMsg = '✅ Operación finalizada. Dirigite a la salida';
+          } else if (t.status === 'EGRESADO') {
+            statusMsg = '👋 ¡Hasta pronto!';
+          }
+
+          const hasNextDock = t.status === 'DESATRACADO' && nextSibling;
+          const iconClass = (t.status === 'DESATRACADO' && !nextSibling) || t.status === 'EGRESADO' ? 'icon-green' : 'icon-primary';
+
           let html = '<div style="text-align: center;">';
           html += '<div class="icon-circle ' + iconClass + '">🚛</div>';
           html += '<h1>' + t.truck + '</h1>';
-          html += '<p class="subtitle">' + statusText[t.status] + '</p>';
+          html += '<p class="subtitle">' + statusMsg + '</p>';
           html += '</div>';
-          
+
+          // Banner de siguiente nave (solo si desatracado + hay hermano pendiente)
+          if (hasNextDock && nextSibling.dock) {
+            html += '<div class="card" style="background: rgba(0,153,168,0.08); border: 2px solid ${colors.primary}; text-align: center; margin-bottom: 16px;">';
+            html += '<p style="margin:0; font-size:13px; color:${colors.textMuted}; font-weight:600;">SIGUIENTE DESTINO</p>';
+            html += '<p style="margin:8px 0 4px 0; font-size:32px; font-weight:700; color:${colors.primary};">' + nextSibling.dock + '</p>';
+            html += '<p style="margin:0; font-size:14px; color:${colors.textSecondary};">Nave ' + (nextSibling.warehouse || '') + (nextSibling.trip_number ? ' • Viaje ' + nextSibling.trip_number : '') + '</p>';
+            html += '</div>';
+          } else if (hasNextDock && !nextSibling.dock) {
+            html += '<div class="card" style="background: #fffbeb; border: 2px solid #fde68a; text-align: center; margin-bottom: 16px;">';
+            html += '<p style="margin:0; font-size:13px; color:#d97706; font-weight:600;">ESPERANDO ASIGNACIÓN</p>';
+            html += '<p style="margin:8px 0 4px 0; font-size:18px; font-weight:600; color:#d97706;">Tenés otro viaje en ' + (nextSibling.warehouse || 'otra nave') + '</p>';
+            html += '<p style="margin:0; font-size:14px; color:${colors.textSecondary};">Aguardá la asignación de dársena</p>';
+            html += '</div>';
+          }
+
           html += '<div class="card">';
           html += '<div class="timeline">';
-          
+
           html += renderTimelineItem(t.ts_entrada, 'Ingreso registrado', t.status === 'ESPERANDO_ASIGNACION' && !t.ts_asignacion);
           html += renderTimelineItem(t.ts_asignacion, 'Dársena asignada' + (t.dock ? ': ' + t.dock : ''), t.status === 'ESPERANDO_ASIGNACION');
           html += renderTimelineItem(t.ts_atracado, 'Atracado', t.status === 'DARSENA_ASIGNADA');
           html += renderTimelineItem(t.ts_desatracado, 'Desatracado', t.status === 'ATRACADO');
-          html += renderTimelineItem(t.ts_egreso, 'Egreso', t.status === 'DESATRACADO');
-          
+
+          if (hasNextDock) {
+            // Mostrar paso intermedio: ir a otra nave
+            html += renderTimelineItem(null, 'Ir a ' + (nextSibling.dock || nextSibling.warehouse || 'otra nave'), t.status === 'DESATRACADO');
+          }
+
+          html += renderTimelineItem(t.ts_egreso, 'Egreso', t.status === 'DESATRACADO' && !hasNextDock);
+
           html += '</div></div>';
+
+          // Mostrar turnos hermanos si los hay
+          if (siblingTurnos.length > 0) {
+            html += '<div class="card" style="margin-top:16px;">';
+            html += '<p style="margin:0 0 12px 0; font-weight:600; font-size:14px; color:${colors.textSecondary};">📋 Tus otros viajes</p>';
+            siblingTurnos.forEach(s => {
+              const sibStatusText = {
+                'ESPERANDO_ASIGNACION': '⏳ Esperando',
+                'DARSENA_ASIGNADA': '📍 ' + (s.dock || ''),
+                'ATRACADO': '🔄 En ' + (s.dock || ''),
+                'DESATRACADO': '✅ Completado',
+                'EGRESADO': '👋 Egresado'
+              };
+              const isCurrent = s.status === 'DARSENA_ASIGNADA' && t.status === 'DESATRACADO';
+              const borderStyle = isCurrent ? 'border:2px solid ${colors.primary}; background:rgba(0,153,168,0.04);' : 'border:1px solid ${colors.border};';
+              html += '<div style="padding:10px 14px; border-radius:8px; margin-bottom:6px; display:flex; align-items:center; justify-content:space-between; ' + borderStyle + '">';
+              html += '<div>';
+              html += '<span style="font-weight:600; font-size:13px;">Viaje ' + (s.trip_number || 'S/N') + '</span>';
+              html += '<span style="font-size:12px; color:${colors.textMuted}; margin-left:8px;">' + (s.warehouse || '') + '</span>';
+              html += '</div>';
+              html += '<span style="font-size:12px;">' + (sibStatusText[s.status] || s.status) + '</span>';
+              html += '</div>';
+            });
+            html += '</div>';
+          }
+
           // Safety notice
           html += '<div class="card" style="background: #fffbeb; border: 1px solid #fde68a; margin-top: 16px;">';
           html += '<p style="margin: 0; font-weight: 600; color: #d97706;">⚠️ PUNTOS A TENER EN CUENTA</p>';
@@ -1155,7 +1247,7 @@ app.get('/turno/:id', (req, res) => {
           html += '<p style="margin: 4px 0 0 0; font-size: 14px; color: ${colors.textPrimary};">• Usar <strong>chaleco reflectivo</strong></p>';
           html += '</div>';
           html += '<p class="refresh-notice">🔄 Actualizando automáticamente</p>';
-          
+
           document.getElementById('content').innerHTML = html;
         }
         
@@ -1275,12 +1367,28 @@ app.get('/dock/:dockId', (req, res) => {
                   '<p style="color:${colors.textMuted};">Dársena ${dockId}</p></div>' +
                   '<button class="btn btn-primary" onclick="location.reload()">Escanear otra dársena</button>';
               } else {
-                document.getElementById('result').innerHTML =
-                  '<div class="card"><div class="icon-circle icon-orange">🚪</div>' +
+                let desatraqueHtml = '<div class="card"><div class="icon-circle icon-orange">🚪</div>' +
                   '<h1 style="color:#d97706;">¡Desatracado!</h1>' +
-                  '<p class="subtitle">Camión ' + data.truck + '</p>' +
-                  '<p style="color:${colors.textMuted};">Puede dirigirse a la salida</p></div>' +
-                  '<button class="btn btn-primary" onclick="location.reload()">Escanear otra dársena</button>';
+                  '<p class="subtitle">Camión ' + data.truck + '</p>';
+
+                if (data.nextDock && data.nextDock.dock) {
+                  desatraqueHtml += '<div style="margin-top:16px; padding:16px; background:rgba(0,153,168,0.08); border:2px solid ${colors.primary}; border-radius:12px;">';
+                  desatraqueHtml += '<p style="margin:0; font-size:12px; font-weight:600; color:${colors.textMuted};">SIGUIENTE DESTINO</p>';
+                  desatraqueHtml += '<p style="margin:6px 0 2px 0; font-size:28px; font-weight:700; color:${colors.primary};">' + data.nextDock.dock + '</p>';
+                  desatraqueHtml += '<p style="margin:0; font-size:14px; color:${colors.textSecondary};">Nave ' + (data.nextDock.warehouse || '') + (data.nextDock.tripNumber ? ' • Viaje ' + data.nextDock.tripNumber : '') + '</p>';
+                  desatraqueHtml += '</div>';
+                } else if (data.nextDock && !data.nextDock.dock) {
+                  desatraqueHtml += '<div style="margin-top:16px; padding:16px; background:#fffbeb; border:2px solid #fde68a; border-radius:12px;">';
+                  desatraqueHtml += '<p style="margin:0; font-size:14px; font-weight:600; color:#d97706;">Tiene otro viaje en ' + (data.nextDock.warehouse || 'otra nave') + '</p>';
+                  desatraqueHtml += '<p style="margin:4px 0 0 0; font-size:13px; color:${colors.textSecondary};">Aguardando asignación de dársena</p>';
+                  desatraqueHtml += '</div>';
+                } else {
+                  desatraqueHtml += '<p style="color:${colors.textMuted};">Puede dirigirse a la salida</p>';
+                }
+
+                desatraqueHtml += '</div>';
+                desatraqueHtml += '<button class="btn btn-primary" onclick="location.reload()">Escanear otra dársena</button>';
+                document.getElementById('result').innerHTML = desatraqueHtml;
               }
             } else {
               document.getElementById('result').innerHTML =
@@ -1432,6 +1540,7 @@ app.get('/operador', (req, res) => {
         .op-badge { font-size: 11px; padding: 2px 8px; border-radius: 4px; font-weight: 600; letter-spacing: 0.3px; }
         .op-descarga { background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; }
         .op-colecta { background: #eff6ff; color: #2563eb; border: 1px solid #bfdbfe; }
+        .op-carga { background: #f0fdf4; color: #16a34a; border: 1px solid #bbf7d0; }
         .dock-cell { cursor: pointer; transition: transform 0.1s, box-shadow 0.2s; }
         .dock-cell:hover { transform: scale(1.08); box-shadow: 0 2px 8px ${colors.shadowHover}; }
       </style>
@@ -1679,7 +1788,7 @@ app.get('/operador', (req, res) => {
         function renderTurnoCard(t) {
           const opBadge = t.operation === 'Colecta'
             ? '<span class="op-badge op-colecta">COLECTA</span>'
-            : '<span class="op-badge op-descarga">DESCARGA</span>';
+            : (t.operation === 'Carga' ? '<span class="op-badge op-carga">CARGA</span>' : '<span class="op-badge op-descarga">DESCARGA</span>');
 
           let html = '<div class="turno-row" onclick="showDetail(\\'' + t.turno_id + '\\')">';
           html += '<div class="turno-info-main">';
@@ -1737,7 +1846,7 @@ app.get('/operador', (req, res) => {
             const rowBg = idx % 2 === 0 ? 'white' : '${colors.bg}';
             const opBadge = t.operation === 'Colecta'
               ? '<span class="op-badge op-colecta">COL</span>'
-              : '<span class="op-badge op-descarga">DESC</span>';
+              : (t.operation === 'Carga' ? '<span class="op-badge op-carga">CAR</span>' : '<span class="op-badge op-descarga">DESC</span>');
 
             html += '<tr style="background:' + rowBg + '; cursor:pointer;" onclick="showDetail(\\'' + t.turno_id + '\\')" onmouseover="this.style.background=\\'${colors.bgCardHover}\\'" onmouseout="this.style.background=\\'' + rowBg + '\\'">';
             html += '<td style="padding:10px 12px; font-weight:600; white-space:nowrap;">' + t.truck + '</td>';
@@ -2322,7 +2431,7 @@ app.get('/admin', (req, res) => {
             html += '<label>Transportista</label><select id="carrier-' + t.turno_id + '"><option value="">Seleccionar...</option>' + carrierOptions + '</select>';
             html += '<div class="row-2">';
             html += '<div><label>Nave</label><select id="warehouse-' + t.turno_id + '"><option value="PL2"' + (t.warehouse === 'PL2' ? ' selected' : '') + '>PL2</option><option value="PL3"' + (t.warehouse === 'PL3' ? ' selected' : '') + '>PL3</option></select></div>';
-            html += '<div><label>Operación</label><select id="operation-' + t.turno_id + '"><option value="Descarga"' + (t.operation === 'Descarga' ? ' selected' : '') + '>Descarga</option><option value="Colecta"' + (t.operation === 'Colecta' ? ' selected' : '') + '>Colecta</option></select></div>';
+            html += '<div><label>Operación</label><select id="operation-' + t.turno_id + '"><option value="Descarga"' + (t.operation === 'Descarga' ? ' selected' : '') + '>Descarga</option><option value="Colecta"' + (t.operation === 'Colecta' ? ' selected' : '') + '>Colecta</option><option value="Carga"' + (t.operation === 'Carga' ? ' selected' : '') + '>Carga</option></select></div>';
             html += '</div>';
             html += '<label>Dársena</label><select id="dock-' + t.turno_id + '"><option value="">Sin asignar</option>';
             for (let i = 1; i <= 40; i++) {
