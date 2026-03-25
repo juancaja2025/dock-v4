@@ -465,6 +465,100 @@ app.post('/api/salida', async (req, res) => {
   }
 });
 
+// ===================== BUSCAR PATENTE EN GOOGLE SHEETS =====================
+const GOOGLE_SHEET_CSV_URL = 'https://docs.google.com/spreadsheets/d/1QwWUe34Yn0BnTfb8WckxzDRmEKJfuATPse9g76VM3n8/gviz/tq?tqx=out:csv';
+
+let sheetCache = { data: null, ts: 0 };
+
+async function fetchSheetData() {
+  // Cache por 5 minutos
+  if (sheetCache.data && (Date.now() - sheetCache.ts) < 300000) {
+    return sheetCache.data;
+  }
+  try {
+    const response = await fetch(GOOGLE_SHEET_CSV_URL);
+    const csvText = await response.text();
+    const rows = parseCSV(csvText);
+    sheetCache = { data: rows, ts: Date.now() };
+    return rows;
+  } catch (err) {
+    console.error('Error fetching Google Sheet:', err.message);
+    return sheetCache.data || [];
+  }
+}
+
+function parseCSV(text) {
+  const lines = text.split('\n');
+  if (lines.length < 2) return [];
+
+  // Parsear headers
+  const headers = parseCSVLine(lines[0]).map(h => h.trim().toLowerCase().replace(/"/g, ''));
+  const results = [];
+
+  for (let i = 1; i < lines.length; i++) {
+    if (!lines[i].trim()) continue;
+    const values = parseCSVLine(lines[i]);
+    const row = {};
+    headers.forEach((h, idx) => {
+      row[h] = (values[idx] || '').replace(/^"|"$/g, '').trim();
+    });
+    results.push(row);
+  }
+  return results;
+}
+
+function parseCSVLine(line) {
+  const result = [];
+  let current = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        current += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (ch === ',' && !inQuotes) {
+      result.push(current);
+      current = '';
+    } else {
+      current += ch;
+    }
+  }
+  result.push(current);
+  return result;
+}
+
+app.get('/api/buscar-patente/:patente', async (req, res) => {
+  try {
+    const patente = (req.params.patente || '').toUpperCase().replace(/[-\s]/g, '');
+    if (!patente || patente.length < 5) {
+      return res.json({ found: false });
+    }
+
+    const rows = await fetchSheetData();
+    // Buscar coincidencia normalizando la patente (sin guiones ni espacios)
+    const match = rows.find(r => {
+      const sheetPatente = (r.patente || '').toUpperCase().replace(/[-\s]/g, '');
+      return sheetPatente === patente;
+    });
+
+    if (match) {
+      // Buscar el campo "numero de viaje" o "viaje"
+      const tripNumber = match['numero de viaje'] || match['viaje'] || match['numero_de_viaje'] || '';
+      const transporte = match['transporte'] || match['transportista'] || '';
+      res.json({ found: true, tripNumber, transporte, patente: match.patente || '' });
+    } else {
+      res.json({ found: false });
+    }
+  } catch (err) {
+    console.error('Error buscando patente:', err);
+    res.json({ found: false, error: 'Error de consulta' });
+  }
+});
+
 // ===================== PÁGINAS HTML =====================
 
 // Página raíz - redirige a entrada
@@ -557,7 +651,8 @@ app.get('/entrada', (req, res) => {
           <label>PATENTE *</label>
           <input type="text" id="truck" placeholder="Ej: AA-123-BB" maxlength="10"
                  style="text-transform: uppercase; font-family: monospace; font-size: 24px; text-align: center;">
-          
+          <div id="patenteStatus" style="display:none; font-size:12px; margin:-4px 0 8px 0; padding:6px 12px; border-radius:6px; text-align:left;"></div>
+
           <label>TRANSPORTISTA *</label>
           <div style="position: relative;">
             <input type="text" id="carrierSearch" placeholder="Escribí para buscar transportista..." autocomplete="off"
@@ -653,6 +748,50 @@ app.get('/entrada', (req, res) => {
         document.getElementById('truck').addEventListener('keyup', function(e) {
           this.value = this.value.toUpperCase();
         });
+
+        // Auto-búsqueda de patente en Google Sheets
+        let patenteSearchTimeout = null;
+        document.getElementById('truck').addEventListener('input', function() {
+          clearTimeout(patenteSearchTimeout);
+          const val = this.value.trim().replace(/[-\\s]/g, '');
+          const statusEl = document.getElementById('patenteStatus');
+          if (val.length < 5) {
+            statusEl.style.display = 'none';
+            return;
+          }
+          statusEl.style.display = 'block';
+          statusEl.style.background = '#eff6ff';
+          statusEl.style.color = '#2563eb';
+          statusEl.style.border = '1px solid #bfdbfe';
+          statusEl.innerHTML = '🔍 Buscando patente en sistema...';
+
+          patenteSearchTimeout = setTimeout(async () => {
+            try {
+              const res = await fetch('/api/buscar-patente/' + encodeURIComponent(val));
+              const data = await res.json();
+              if (data.found && data.tripNumber) {
+                document.getElementById('tripNumber').value = data.tripNumber;
+                statusEl.style.background = '#f0fdf4';
+                statusEl.style.color = '#16a34a';
+                statusEl.style.border = '1px solid #bbf7d0';
+                statusEl.innerHTML = '✅ Viaje encontrado: <strong>' + data.tripNumber + '</strong>' + (data.transporte ? ' (' + data.transporte + ')' : '');
+              } else if (data.found) {
+                statusEl.style.background = '#fffbeb';
+                statusEl.style.color = '#d97706';
+                statusEl.style.border = '1px solid #fde68a';
+                statusEl.innerHTML = '⚠️ Patente encontrada pero sin N° de viaje asignado';
+              } else {
+                statusEl.style.background = '#fef2f2';
+                statusEl.style.color = '#dc2626';
+                statusEl.style.border = '1px solid #fecaca';
+                statusEl.innerHTML = '❌ Patente no encontrada en el listado de viajes';
+              }
+            } catch(e) {
+              statusEl.style.display = 'none';
+            }
+          }, 600);
+        });
+
         document.getElementById('truck').focus();
 
         async function registrar() {
@@ -1114,7 +1253,13 @@ app.get('/operador', (req, res) => {
           <div class="kpi"><div class="kpi-value">-</div><div class="kpi-label">Dársenas libres</div></div>
         </div>
 
-        <h2>Turnos activos</h2>
+        <div style="display:flex; align-items:center; gap:12px; margin-bottom:12px; flex-wrap:wrap;">
+          <h2 style="margin:0;">Turnos activos</h2>
+          <input type="text" id="searchTurnos" placeholder="Buscar patente o transportista..."
+                 oninput="renderTurnos()"
+                 style="flex:1; min-width:200px; margin:0; padding:10px 14px; font-size:14px; min-height:40px;">
+          <button onclick="toggleViewMode()" id="viewModeBtn" style="background:${colors.bgCard}; border:1px solid ${colors.border}; color:${colors.textSecondary}; padding:8px 14px; border-radius:8px; font-family:'Montserrat',sans-serif; font-size:13px; font-weight:600; cursor:pointer; white-space:nowrap;">📋 Vista tabla</button>
+        </div>
         <div id="turnos"></div>
         
         <h2 style="margin-top: 24px;">Estado de dársenas</h2>
@@ -1140,6 +1285,8 @@ app.get('/operador', (req, res) => {
         let prevEsperando = -1;
         let audioEnabled = false;
         let activeSelect = null;
+        let viewMode = 'cards'; // 'cards' o 'table'
+        let collapsedGroups = {};
         
         // Detectar cuando alguien está usando un select
         document.addEventListener('focus', (e) => {
@@ -1241,61 +1388,191 @@ app.get('/operador', (req, res) => {
             '<div class="kpi"><div class="kpi-value" style="color:#16a34a;">' + docksLibres + '</div><div class="kpi-label">Dársenas libres</div></div>';
         }
         
+        function toggleViewMode() {
+          viewMode = viewMode === 'cards' ? 'table' : 'cards';
+          const btn = document.getElementById('viewModeBtn');
+          btn.innerHTML = viewMode === 'cards' ? '📋 Vista tabla' : '🃏 Vista tarjetas';
+          renderTurnos();
+        }
+
+        function toggleGroup(groupKey) {
+          collapsedGroups[groupKey] = !collapsedGroups[groupKey];
+          renderTurnos();
+        }
+
         function renderTurnos() {
           const filtered = getFilteredTurnos();
-          const activos = filtered.filter(t => t.status !== 'EGRESADO');
-          
+          let activos = filtered.filter(t => t.status !== 'EGRESADO');
+
+          // Filtro de búsqueda
+          const search = (document.getElementById('searchTurnos') || {}).value || '';
+          if (search.trim()) {
+            const q = search.trim().toLowerCase();
+            activos = activos.filter(t =>
+              t.truck.toLowerCase().includes(q) ||
+              (t.carrier || '').toLowerCase().includes(q) ||
+              (t.trip_number || '').toLowerCase().includes(q) ||
+              (t.dock || '').toLowerCase().includes(q)
+            );
+          }
+
           if (activos.length === 0) {
-            document.getElementById('turnos').innerHTML = '<div class="card" style="text-align:center; opacity:0.6;">No hay turnos activos en ' + currentFilter + '</div>';
+            document.getElementById('turnos').innerHTML = '<div class="card" style="text-align:center; opacity:0.6;">' + (search.trim() ? 'Sin resultados para "' + search.trim() + '"' : 'No hay turnos activos en ' + currentFilter) + '</div>';
             return;
           }
-          
-          let html = '';
+
+          // Agrupar por estado
+          const statusOrder = ['ESPERANDO_ASIGNACION', 'DARSENA_ASIGNADA', 'ATRACADO', 'DESATRACADO'];
+          const statusLabels = {
+            'ESPERANDO_ASIGNACION': '⏳ Esperando asignación',
+            'DARSENA_ASIGNADA': '📍 Dársena asignada',
+            'ATRACADO': '⚓ Atracados',
+            'DESATRACADO': '🚪 Desatracados'
+          };
+          const statusColors = {
+            'ESPERANDO_ASIGNACION': '#d97706',
+            'DARSENA_ASIGNADA': '${colors.primary}',
+            'ATRACADO': '#16a34a',
+            'DESATRACADO': '#ea580c'
+          };
+
+          const groups = {};
+          statusOrder.forEach(s => { groups[s] = []; });
           activos.forEach(t => {
-            const opBadge = t.operation === 'Colecta' 
-              ? '<span class="op-badge op-colecta">COLECTA</span>' 
-              : '<span class="op-badge op-descarga">DESCARGA</span>';
-            
-            html += '<div class="turno-row" onclick="showDetail(\\'' + t.turno_id + '\\')">';
-            html += '<div class="turno-info-main">';
-            html += '<h3>' + t.truck + ' ' + getStatusBadge(t.status) + ' ' + opBadge + '</h3>';
-            html += '<p>' + t.carrier + (t.trip_number ? ' • Viaje: ' + t.trip_number : '') + (t.dock ? ' • ' + t.dock : '') + '</p>';
+            if (groups[t.status]) groups[t.status].push(t);
+          });
+
+          let html = '';
+          statusOrder.forEach(status => {
+            const items = groups[status];
+            if (items.length === 0) return;
+            const collapsed = collapsedGroups[status];
+            const color = statusColors[status];
+            html += '<div style="margin-bottom:16px;">';
+            html += '<div onclick="toggleGroup(\\'' + status + '\\')" style="cursor:pointer; display:flex; align-items:center; gap:8px; padding:10px 14px; background:' + color + '10; border:1px solid ' + color + '30; border-radius:10px; margin-bottom:' + (collapsed ? '0' : '8') + 'px; user-select:none;">';
+            html += '<span style="font-size:13px; transform:rotate(' + (collapsed ? '-90' : '0') + 'deg); transition:transform 0.2s;">▼</span>';
+            html += '<span style="font-weight:600; font-size:14px; color:' + color + ';">' + statusLabels[status] + '</span>';
+            html += '<span style="background:' + color + '; color:white; font-size:11px; font-weight:700; padding:2px 8px; border-radius:10px; margin-left:4px;">' + items.length + '</span>';
             html += '</div>';
-            html += '<div class="turno-actions">';
-            
+
+            if (!collapsed) {
+              if (viewMode === 'table') {
+                html += renderTurnosTable(items, status);
+              } else {
+                items.forEach(t => { html += renderTurnoCard(t); });
+              }
+            }
+            html += '</div>';
+          });
+
+          document.getElementById('turnos').innerHTML = html;
+        }
+
+        function renderTurnoCard(t) {
+          const opBadge = t.operation === 'Colecta'
+            ? '<span class="op-badge op-colecta">COLECTA</span>'
+            : '<span class="op-badge op-descarga">DESCARGA</span>';
+
+          let html = '<div class="turno-row" onclick="showDetail(\\'' + t.turno_id + '\\')">';
+          html += '<div class="turno-info-main">';
+          html += '<h3>' + t.truck + ' ' + getStatusBadge(t.status) + ' ' + opBadge + '</h3>';
+          html += '<p>' + t.carrier + (t.trip_number ? ' • Viaje: ' + t.trip_number : '') + (t.dock ? ' • ' + t.dock : '') + '</p>';
+          html += '</div>';
+          html += '<div class="turno-actions">';
+
+          if (t.status === 'ESPERANDO_ASIGNACION') {
+            const dockStart = t.warehouse === 'PL3' ? 22 : 1;
+            const dockEnd = t.warehouse === 'PL3' ? 40 : 21;
+            html += '<select id="dock-' + t.turno_id + '" onclick="event.stopPropagation();">';
+            for (let i = dockStart; i <= dockEnd; i++) {
+              const d = 'D-' + String(i).padStart(2, '0');
+              const ocupada = allTurnos.some(x => x.dock === d && x.status !== 'EGRESADO' && x.status !== 'DESATRACADO');
+              html += '<option value="' + d + '"' + (ocupada ? ' disabled' : '') + '>' + d + (ocupada ? ' (ocup)' : '') + '</option>';
+            }
+            html += '</select>';
+            html += '<button class="btn btn-green" onclick="event.stopPropagation(); asignar(\\'' + t.turno_id + '\\')">Asignar</button>';
+          }
+
+          if (t.status === 'DESATRACADO') {
+            html += '<select id="reasign-' + t.turno_id + '" onclick="event.stopPropagation();">';
+            html += '<option value="">🔄 Reasignar...</option>';
+            for (let i = 1; i <= 40; i++) {
+              const d = 'D-' + String(i).padStart(2, '0');
+              const ocupada = allTurnos.some(x => x.dock === d && x.status !== 'EGRESADO' && x.status !== 'DESATRACADO');
+              if (!ocupada) html += '<option value="' + d + '">' + d + '</option>';
+            }
+            html += '</select>';
+            html += '<button class="btn btn-orange" onclick="event.stopPropagation(); reasignar(\\'' + t.turno_id + '\\')">Reasignar</button>';
+          }
+
+          html += '<div style="text-align:right;">';
+          html += '<div class="' + getTimeBadgeClass(t.ts_entrada) + '">⏱ ' + getTimeAgo(t.ts_entrada) + '</div>';
+          html += '<div class="time-badge">' + formatTime(t.ts_entrada) + '</div>';
+          html += '</div>';
+          html += '</div></div>';
+          return html;
+        }
+
+        function renderTurnosTable(items, status) {
+          let html = '<div style="overflow-x:auto;">';
+          html += '<table style="width:100%; border-collapse:separate; border-spacing:0; font-size:13px; background:white; border-radius:10px; overflow:hidden; border:1px solid ${colors.border};">';
+          html += '<thead><tr style="background:${colors.bg};">';
+          html += '<th style="padding:10px 12px; text-align:left; font-weight:600; color:${colors.textSecondary}; font-size:11px; text-transform:uppercase; letter-spacing:0.5px;">Patente</th>';
+          html += '<th style="padding:10px 12px; text-align:left; font-weight:600; color:${colors.textSecondary}; font-size:11px; text-transform:uppercase; letter-spacing:0.5px;">Transportista</th>';
+          html += '<th style="padding:10px 12px; text-align:left; font-weight:600; color:${colors.textSecondary}; font-size:11px; text-transform:uppercase; letter-spacing:0.5px;">Op</th>';
+          html += '<th style="padding:10px 12px; text-align:left; font-weight:600; color:${colors.textSecondary}; font-size:11px; text-transform:uppercase; letter-spacing:0.5px;">Dársena</th>';
+          html += '<th style="padding:10px 12px; text-align:left; font-weight:600; color:${colors.textSecondary}; font-size:11px; text-transform:uppercase; letter-spacing:0.5px;">Tiempo</th>';
+          html += '<th style="padding:10px 12px; text-align:center; font-weight:600; color:${colors.textSecondary}; font-size:11px; text-transform:uppercase; letter-spacing:0.5px;">Acción</th>';
+          html += '</tr></thead><tbody>';
+
+          items.forEach((t, idx) => {
+            const rowBg = idx % 2 === 0 ? 'white' : '${colors.bg}';
+            const opBadge = t.operation === 'Colecta'
+              ? '<span class="op-badge op-colecta">COL</span>'
+              : '<span class="op-badge op-descarga">DESC</span>';
+
+            html += '<tr style="background:' + rowBg + '; cursor:pointer;" onclick="showDetail(\\'' + t.turno_id + '\\')" onmouseover="this.style.background=\\'${colors.bgCardHover}\\'" onmouseout="this.style.background=\\'' + rowBg + '\\'">';
+            html += '<td style="padding:10px 12px; font-weight:600; white-space:nowrap;">' + t.truck + '</td>';
+            html += '<td style="padding:10px 12px; max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">' + t.carrier + (t.trip_number ? ' <span style="color:${colors.textMuted}; font-size:11px;">V:' + t.trip_number + '</span>' : '') + '</td>';
+            html += '<td style="padding:10px 12px;">' + opBadge + '</td>';
+            html += '<td style="padding:10px 12px; font-weight:600;">' + (t.dock || '-') + '</td>';
+            html += '<td style="padding:10px 12px;"><span class="' + getTimeBadgeClass(t.ts_entrada) + '">⏱ ' + getTimeAgo(t.ts_entrada) + '</span></td>';
+            html += '<td style="padding:10px 12px; text-align:center;" onclick="event.stopPropagation();">';
+
             if (t.status === 'ESPERANDO_ASIGNACION') {
               const dockStart = t.warehouse === 'PL3' ? 22 : 1;
               const dockEnd = t.warehouse === 'PL3' ? 40 : 21;
-              html += '<select id="dock-' + t.turno_id + '" onclick="event.stopPropagation();">';
+              html += '<div style="display:flex; gap:4px; justify-content:center;">';
+              html += '<select id="dock-' + t.turno_id + '" style="min-height:32px; padding:4px 8px; font-size:12px; min-width:70px; margin:0;">';
               for (let i = dockStart; i <= dockEnd; i++) {
                 const d = 'D-' + String(i).padStart(2, '0');
                 const ocupada = allTurnos.some(x => x.dock === d && x.status !== 'EGRESADO' && x.status !== 'DESATRACADO');
-                html += '<option value="' + d + '"' + (ocupada ? ' disabled' : '') + '>' + d + (ocupada ? ' (ocup)' : '') + '</option>';
+                html += '<option value="' + d + '"' + (ocupada ? ' disabled' : '') + '>' + d + (ocupada ? ' ✗' : '') + '</option>';
               }
               html += '</select>';
-              html += '<button class="btn btn-green" onclick="event.stopPropagation(); asignar(\\'' + t.turno_id + '\\')">Asignar</button>';
-            }
-            
-            if (t.status === 'DESATRACADO') {
-              html += '<select id="reasign-' + t.turno_id + '" onclick="event.stopPropagation();">';
-              html += '<option value="">🔄 Reasignar...</option>';
+              html += '<button class="btn btn-green" style="min-height:32px; padding:4px 10px; font-size:12px; margin:0; width:auto; display:inline-block;" onclick="asignar(\\'' + t.turno_id + '\\')">✓</button>';
+              html += '</div>';
+            } else if (t.status === 'DESATRACADO') {
+              html += '<div style="display:flex; gap:4px; justify-content:center;">';
+              html += '<select id="reasign-' + t.turno_id + '" style="min-height:32px; padding:4px 8px; font-size:12px; min-width:70px; margin:0;">';
+              html += '<option value="">🔄...</option>';
               for (let i = 1; i <= 40; i++) {
                 const d = 'D-' + String(i).padStart(2, '0');
                 const ocupada = allTurnos.some(x => x.dock === d && x.status !== 'EGRESADO' && x.status !== 'DESATRACADO');
                 if (!ocupada) html += '<option value="' + d + '">' + d + '</option>';
               }
               html += '</select>';
-              html += '<button class="btn btn-orange" onclick="event.stopPropagation(); reasignar(\\'' + t.turno_id + '\\')">Reasignar</button>';
+              html += '<button class="btn btn-orange" style="min-height:32px; padding:4px 10px; font-size:12px; margin:0; width:auto; display:inline-block;" onclick="reasignar(\\'' + t.turno_id + '\\')">✓</button>';
+              html += '</div>';
+            } else {
+              html += '<span style="color:${colors.textMuted};">—</span>';
             }
-            
-            html += '<div style="text-align:right;">';
-            html += '<div class="' + getTimeBadgeClass(t.ts_entrada) + '">⏱ ' + getTimeAgo(t.ts_entrada) + '</div>';
-            html += '<div class="time-badge">' + formatTime(t.ts_entrada) + '</div>';
-            html += '</div>';
-            html += '</div></div>';
+
+            html += '</td></tr>';
           });
-          
-          document.getElementById('turnos').innerHTML = html;
+
+          html += '</tbody></table></div>';
+          return html;
         }
         
         function renderDocks() {
