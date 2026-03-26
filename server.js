@@ -585,6 +585,142 @@ app.post('/api/salida', async (req, res) => {
   }
 });
 
+// ===================== API GARITA: LOGIN =====================
+app.post('/api/garita/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password) return res.json({ success: false, error: 'Email y contraseña requeridos' });
+    const result = await pool.query(
+      'SELECT nombre, email FROM garita_usuarios WHERE email=$1 AND password=$2 AND activo=true',
+      [email.trim().toLowerCase(), password]
+    );
+    if (result.rows.length === 0) return res.json({ success: false, error: 'Credenciales inválidas' });
+    res.json({ success: true, nombre: result.rows[0].nombre, email: result.rows[0].email });
+  } catch (err) {
+    console.error(err);
+    res.json({ success: false, error: 'Error de base de datos' });
+  }
+});
+
+// ===================== API GARITA: CHECK DUPLICADO =====================
+app.get('/api/garita/check-duplicado/:patente', async (req, res) => {
+  try {
+    const patente = req.params.patente.toUpperCase().trim();
+    const result = await pool.query(
+      "SELECT * FROM turnos WHERE UPPER(truck)=$1 AND status != 'EGRESADO' ORDER BY ts_entrada DESC",
+      [patente]
+    );
+    if (result.rows.length === 0) return res.json({ exists: false });
+    res.json({
+      exists: true,
+      turnos: result.rows,
+      registrado_por: result.rows[0].registrado_por || 'driver'
+    });
+  } catch (err) {
+    console.error(err);
+    res.json({ exists: false, error: 'Error de base de datos' });
+  }
+});
+
+// ===================== API GARITA: ENTRADA =====================
+app.post('/api/garita/entrada', async (req, res) => {
+  try {
+    const { truck, carrier, chofer, dni_chofer, celular_chofer, patente_semi,
+            contenedor, precinto, warehouse, obs_ingreso, viaje_hdr } = req.body;
+
+    if (!truck || !carrier || !chofer) {
+      return res.json({ success: false, error: 'Patente, transportista y chofer son requeridos' });
+    }
+
+    const patenteUpper = truck.toUpperCase().trim();
+
+    // Check duplicado
+    const existing = await pool.query(
+      "SELECT * FROM turnos WHERE UPPER(truck)=$1 AND status != 'EGRESADO' ORDER BY ts_entrada DESC LIMIT 1",
+      [patenteUpper]
+    );
+
+    if (existing.rows.length > 0) {
+      const turno = existing.rows[0];
+      if ((turno.registrado_por || 'driver') === 'driver') {
+        // Enriquecer turno existente del chofer
+        await pool.query(
+          `UPDATE turnos SET chofer=$1, dni_chofer=$2, celular_chofer=$3, patente_semi=$4,
+           contenedor=$5, precinto=$6, obs_ingreso=$7, registrado_por='guardia'
+           WHERE id=$8`,
+          [chofer, dni_chofer || null, celular_chofer || null, patente_semi ? patente_semi.toUpperCase() : null,
+           contenedor || null, precinto || null, obs_ingreso || null, turno.id]
+        );
+        return res.json({ success: true, turno_id: turno.turno_id, enriched: true });
+      } else {
+        return res.json({ success: false, error: 'Vehículo ya registrado en predio por garita' });
+      }
+    }
+
+    // Crear nuevo turno
+    const countResult = await pool.query('SELECT COUNT(*) FROM turnos');
+    const turnoId = 'TRN-' + String(parseInt(countResult.rows[0].count) + 1).padStart(4, '0');
+
+    await pool.query(
+      `INSERT INTO turnos (turno_id, truck, carrier, chofer, dni_chofer, celular_chofer, patente_semi,
+        contenedor, precinto, warehouse, obs_ingreso, trip_number, operation, type, status, ts_entrada, registrado_por)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'Descarga','INBOUND','ESPERANDO_ASIGNACION',CURRENT_TIMESTAMP,'guardia')`,
+      [turnoId, patenteUpper, carrier, chofer, dni_chofer || null, celular_chofer || null,
+       patente_semi ? patente_semi.toUpperCase() : null, contenedor || null, precinto || null,
+       warehouse || '', obs_ingreso || null, viaje_hdr || null]
+    );
+
+    res.json({ success: true, turno_id: turnoId, enriched: false });
+  } catch (err) {
+    console.error(err);
+    res.json({ success: false, error: 'Error de base de datos' });
+  }
+});
+
+// ===================== API GARITA: SALIDA =====================
+app.post('/api/garita/salida', async (req, res) => {
+  try {
+    const { truck, obs_egreso } = req.body;
+    if (!truck) return res.json({ success: false, error: 'Patente requerida' });
+
+    const patenteUpper = truck.toUpperCase().trim();
+    const existing = await pool.query(
+      "SELECT * FROM turnos WHERE UPPER(truck)=$1 AND status != 'EGRESADO' ORDER BY ts_entrada DESC LIMIT 1",
+      [patenteUpper]
+    );
+
+    if (existing.rows.length === 0) {
+      return res.json({ success: false, error: 'No se encontró vehículo activo con esa patente' });
+    }
+
+    const turno = existing.rows[0];
+    await pool.query(
+      "UPDATE turnos SET status='EGRESADO', ts_egreso=CURRENT_TIMESTAMP, obs_egreso=$1 WHERE id=$2",
+      [obs_egreso || null, turno.id]
+    );
+
+    const updated = await pool.query('SELECT * FROM turnos WHERE id=$1', [turno.id]);
+    res.json({ success: true, turno: updated.rows[0] });
+  } catch (err) {
+    console.error(err);
+    res.json({ success: false, error: 'Error de base de datos' });
+  }
+});
+
+// ===================== API GARITA: HISTORIAL =====================
+app.get('/api/garita/historial', async (req, res) => {
+  try {
+    const days = parseInt(req.query.days) || 7;
+    const result = await pool.query(
+      `SELECT * FROM turnos WHERE ts_entrada > NOW() - INTERVAL '${days} days' ORDER BY ts_entrada DESC`
+    );
+    res.json({ success: true, turnos: result.rows });
+  } catch (err) {
+    console.error(err);
+    res.json({ success: false, error: 'Error de base de datos' });
+  }
+});
+
 // ===================== BUSCAR PATENTE EN GOOGLE SHEETS =====================
 const GOOGLE_SHEET_CSV_URL = 'https://docs.google.com/spreadsheets/d/1QwWUe34Yn0BnTfb8WckxzDRmEKJfuATPse9g76VM3n8/gviz/tq?tqx=out:csv';
 
@@ -2662,6 +2798,689 @@ app.get('/garita', (req, res) => {
     </body></html>
   `);
 });
+// ==================== PÁGINA GARITA-REGISTRO ====================
+app.get('/garita-registro', (req, res) => {
+  const carriers = [
+    "Acaricia Transporte Logan","Adrian Servicio","Alfa Omega","Americantec","Andesmar","Andreani","Apicol","ASPELEYTER","Avaltrans","AYG Trucks",
+    "Bahia SRL","Balboa","Bataglia","Beira Mar","Bessone","Better Catering","Biopak","BL Puerto y Logística","Blanca Luna","Brouclean","Bulonera Central","Bulonera Pacheco",
+    "Camila Duarte","Cantarini","CASA Thames","CBC Group","CFA Fumigación","Ciari","Cimes","CISA","CLSA","Comercial Ñandubay","Container Leasing","CORREO Urbano","Cruz del Sur","CST Transporte",
+    "DATULI","Del Valle","DHL","Don Antonio","Don Gumer","DPD","Duro",
+    "Enviopack","EPSA","Erbas","EURO Packaging","Expreso Oro Negro",
+    "Failde","FAILE","Flecha Lok","FM Transporte","FRATI","Fravega","FIS Logística",
+    "Gabcin","Gentile","Grabet","Grasso","Grupo GLI","Grupo Luro","Grupo Silco","Guevara Fletes",
+    "HDL Transporte","HECA","HFL","HIMP A","Hornero",
+    "IAFRATELLI","IFLOW","Impresur","Internavegación","INTERMEDIO","Id Group",
+    "Joaquin","JM Yaya e Hijos","Juarez",
+    "La Sevillanita","La Tablada","LEO Trucks","Lir","Loginter","Logística del Valle","Logística Giménez","Logística Integral Romano","Logística Soria","Logitech","Lomas del Mirador","LTN","Luisito","Lugone","Ludamany",
+    "Marra e Hijos","Marino","MARIANO","Maringa","MAV","Meli (Mercado Libre)","MICHELIN (Mantenimiento)","Mirtrans","Moova","Moreiro","Multarys Traslados",
+    "Nahuel Remolques","Navarro","NB Cargo","Newsan","Nieva","Norlog","Norte",
+    "OCA","OCASA","Oliveri Transporte","Onetrade","Oro Negro","Oriente Elevadores",
+    "Pabile","Paganini","PANGEA","Parra","Pavile","PEF","PLK Group","Promei","Provenzano","PYTEL",
+    "QX",
+    "Ragazzi","Reyna Isabel","Romano","Ruta 21 DPD",
+    "Saff","Sainz","SERVINTAR","SERVITRAN","SIARI","Sipe","Spineta","STC","SUMAR Servicio Industrial",
+    "Técnica Lift","Techin","TGC Autoelevadores","Thames","Toledo","Transporte del Valle","Transporte Grasso","Transporte Juarez","Transporte Norte","Transporte Trejo","Tronador",
+    "Unibrick","Unión Logística","Unitrans","Urbano Logística",
+    "Vega","VOLKOV","Vento",
+    "Webpack","WBL",
+    "Otros"
+  ];
+  const carrierListJSON = JSON.stringify(carriers);
+
+  res.send(`
+    <!DOCTYPE html>
+    <html><head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      ${fontLink}
+      <title>Garita - Registro de Ingresos/Egresos</title>
+      <style>${styles}
+        .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin-bottom: 24px; }
+        label { display: block; text-align: left; color: ${colors.textMuted}; font-size: 13px; margin-bottom: 4px; margin-top: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+        .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+        textarea { width: 100%; padding: 12px; border: 2px solid rgba(255,255,255,0.1); border-radius: 12px; font-size: 15px; background: rgba(255,255,255,0.05); color: white; min-height: 80px; resize: vertical; font-family: inherit; }
+        textarea:focus { outline: none; border-color: ${colors.primary}; }
+        .banner-info { background: rgba(0,153,168,0.15); border: 1px solid ${colors.primary}; color: ${colors.primary}; padding: 12px; border-radius: 8px; margin-bottom: 12px; font-size: 14px; }
+        .banner-error { background: rgba(239,68,68,0.15); border: 1px solid #ef4444; color: #fca5a5; padding: 12px; border-radius: 8px; margin-bottom: 12px; font-size: 14px; }
+        .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: ${colors.green}; color: white; padding: 14px 28px; border-radius: 12px; font-weight: 600; z-index: 2000; display: none; box-shadow: 0 4px 20px rgba(0,0,0,0.3); }
+        .toast.active { display: block; animation: fadeInUp 0.3s ease; }
+        @keyframes fadeInUp { from { opacity:0; transform: translateX(-50%) translateY(20px); } to { opacity:1; transform: translateX(-50%) translateY(0); } }
+        .guard-header { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+        .guard-header .guard-name { font-size: 14px; color: ${colors.primary}; font-weight: 600; }
+        .egreso-card { background: rgba(255,255,255,0.08); border-radius: 12px; padding: 16px; margin: 16px 0; border: 1px solid rgba(255,255,255,0.1); }
+        .egreso-card .row { display: flex; justify-content: space-between; margin-bottom: 8px; }
+        .egreso-card .label { color: ${colors.textMuted}; font-size: 13px; }
+        .egreso-card .value { font-weight: 600; font-size: 15px; }
+        .hist-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+        .hist-table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 700px; }
+        .hist-table th { background: rgba(0,153,168,0.2); color: ${colors.primary}; padding: 10px 8px; text-align: left; font-weight: 600; position: sticky; top: 0; }
+        .hist-table td { padding: 10px 8px; border-bottom: 1px solid rgba(255,255,255,0.05); }
+        .hist-table tr:hover { background: rgba(255,255,255,0.03); }
+        .range-btns { display: flex; gap: 8px; margin-bottom: 12px; }
+        .range-btn { padding: 8px 16px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.05); color: ${colors.light}; cursor: pointer; font-weight: 600; font-size: 13px; }
+        .range-btn.active { background: ${colors.primary}; color: white; border-color: ${colors.primary}; }
+        .carrier-dropdown { position: relative; }
+        .carrier-list { position: absolute; top: 100%; left: 0; right: 0; max-height: 200px; overflow-y: auto; background: ${colors.darkBlue}; border: 1px solid rgba(255,255,255,0.15); border-radius: 0 0 12px 12px; z-index: 100; display: none; }
+        .carrier-list.open { display: block; }
+        .carrier-item { padding: 12px 16px; cursor: pointer; font-size: 15px; }
+        .carrier-item:hover { background: rgba(0,153,168,0.2); }
+        .carrier-item.highlighted { background: rgba(0,153,168,0.15); }
+        @media (max-width: 768px) {
+          .row-2 { grid-template-columns: 1fr; }
+          .grid-3 { grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+          .kpi { padding: 12px; }
+          .kpi-value { font-size: 28px; }
+        }
+        @media (max-width: 500px) {
+          .grid-3 { grid-template-columns: 1fr; }
+        }
+      </style>
+    </head><body>
+      <div class="container-wide">
+        <!-- LOGIN -->
+        <div id="login-section">
+          <div style="text-align:center; padding-top:60px;">
+            <img src="${logoSrc}" alt="OCASA" class="logo-large">
+            <div class="icon-circle icon-primary">🛡️</div>
+            <h1>Acceso Garita</h1>
+            <p class="subtitle">Ingresá tus credenciales</p>
+          </div>
+          <div class="card" style="max-width:400px; margin:0 auto;">
+            <div id="login-error" class="error" style="display:none;"></div>
+            <label>EMAIL</label>
+            <input type="email" id="login-email" placeholder="guardia@ocasa.com">
+            <label>CONTRASEÑA</label>
+            <input type="password" id="login-pass" placeholder="Contraseña">
+            <button class="btn btn-primary" onclick="doLogin()">Ingresar</button>
+          </div>
+        </div>
+
+        <!-- PANEL PRINCIPAL (oculto hasta login) -->
+        <div id="main-panel" style="display:none;">
+          <div class="header">
+            <div class="header-left">
+              <img src="${logoSrc}" alt="OCASA" class="logo">
+              <div>
+                <h1>Registro de Garita</h1>
+                <div class="guard-header">
+                  <span class="guard-name" id="guard-name-display"></span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- KPIs -->
+          <div class="grid-3" id="kpis-garita">
+            <div class="kpi"><div class="kpi-value">-</div><div class="kpi-label">En predio</div></div>
+            <div class="kpi"><div class="kpi-value">-</div><div class="kpi-label">Ingresos hoy</div></div>
+            <div class="kpi"><div class="kpi-value">-</div><div class="kpi-label">Egresos hoy</div></div>
+          </div>
+
+          <!-- TABS -->
+          <div class="tabs">
+            <button class="tab active" onclick="showTab('ingreso', this)">Ingreso</button>
+            <button class="tab" onclick="showTab('egreso', this)">Egreso</button>
+            <button class="tab" onclick="showTab('historial', this)">Historial</button>
+          </div>
+
+          <!-- TAB INGRESO -->
+          <div id="tab-ingreso">
+            <div class="card">
+              <div id="ingreso-banner"></div>
+              <div id="ingreso-error" class="error" style="display:none;"></div>
+
+              <label>PATENTE TRACTOR *</label>
+              <input type="text" id="ing-truck" placeholder="Ej: AA-123-BB" maxlength="10"
+                     style="text-transform:uppercase; font-family:monospace; font-size:22px; text-align:center;"
+                     onblur="checkPatente()">
+
+              <label>TRANSPORTISTA *</label>
+              <div class="carrier-dropdown">
+                <input type="text" id="ing-carrier" placeholder="Escribí para buscar..." autocomplete="off"
+                       oninput="filterCarriers()" onfocus="filterCarriers()">
+                <div class="carrier-list" id="carrier-list"></div>
+              </div>
+
+              <label>NOMBRE Y APELLIDO DEL CHOFER *</label>
+              <input type="text" id="ing-chofer" placeholder="Nombre completo">
+
+              <div class="row-2">
+                <div>
+                  <label>DNI CHOFER</label>
+                  <input type="text" id="ing-dni" placeholder="Ej: 12345678" maxlength="10">
+                </div>
+                <div>
+                  <label>CELULAR</label>
+                  <input type="tel" id="ing-celular" placeholder="Ej: 1155554444">
+                </div>
+              </div>
+
+              <div class="row-2">
+                <div>
+                  <label>PATENTE SEMI</label>
+                  <input type="text" id="ing-semi" placeholder="Semi/Acoplado" style="text-transform:uppercase;" maxlength="10">
+                </div>
+                <div>
+                  <label>N° CONTENEDOR</label>
+                  <input type="text" id="ing-contenedor" placeholder="Contenedor">
+                </div>
+              </div>
+
+              <div class="row-2">
+                <div>
+                  <label>PRECINTO</label>
+                  <input type="text" id="ing-precinto" placeholder="N° precinto">
+                </div>
+                <div>
+                  <label>NAVE</label>
+                  <select id="ing-nave">
+                    <option value="">Sin asignar</option>
+                    <option value="PL2">PL2</option>
+                    <option value="PL3">PL3</option>
+                  </select>
+                </div>
+              </div>
+
+              <label>VIAJE HDR</label>
+              <input type="text" id="ing-viaje" placeholder="N° de viaje (opcional)">
+
+              <label>OBSERVACIONES DE INGRESO</label>
+              <textarea id="ing-obs" placeholder="Observaciones..."></textarea>
+
+              <button class="btn btn-primary" id="btn-ingreso" onclick="registrarIngreso()">Registrar Ingreso</button>
+            </div>
+          </div>
+
+          <!-- TAB EGRESO -->
+          <div id="tab-egreso" style="display:none;">
+            <div class="card">
+              <div id="egreso-error" class="error" style="display:none;"></div>
+
+              <label>BUSCAR POR PATENTE</label>
+              <div style="display:flex; gap:8px;">
+                <input type="text" id="egr-truck" placeholder="Patente del tractor"
+                       style="text-transform:uppercase; font-family:monospace; font-size:20px; text-align:center; flex:1;"
+                       onkeydown="if(event.key==='Enter')buscarParaEgreso()">
+                <button class="btn btn-primary" onclick="buscarParaEgreso()" style="width:auto; margin-top:0; padding:12px 24px;">Buscar</button>
+              </div>
+
+              <div id="egreso-result" style="display:none;">
+                <div class="egreso-card" id="egreso-info"></div>
+                <label>OBSERVACIONES DE EGRESO</label>
+                <textarea id="egr-obs" placeholder="Observaciones de salida..."></textarea>
+                <button class="btn btn-orange" id="btn-egreso" onclick="confirmarEgreso()">Confirmar Egreso</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- TAB HISTORIAL -->
+          <div id="tab-historial" style="display:none;">
+            <div class="card">
+              <div class="range-btns">
+                <button class="range-btn" onclick="loadHistorial(0, this)">Hoy</button>
+                <button class="range-btn active" onclick="loadHistorial(7, this)">7 días</button>
+                <button class="range-btn" onclick="loadHistorial(30, this)">30 días</button>
+              </div>
+              <input type="text" id="hist-filter" placeholder="Filtrar por patente..." style="font-size:14px; margin-bottom:12px;"
+                     oninput="filterHistorial()">
+              <div class="hist-table-wrap">
+                <table class="hist-table">
+                  <thead>
+                    <tr>
+                      <th>Fecha</th><th>Patente</th><th>Semi</th><th>Chofer</th>
+                      <th>Empresa</th><th>Nave</th><th>Estado</th><th>Obs</th>
+                    </tr>
+                  </thead>
+                  <tbody id="hist-body"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <p class="refresh-notice">🔄 Actualizando automáticamente</p>
+        </div>
+      </div>
+
+      <!-- Toast -->
+      <div class="toast" id="toast"></div>
+
+      <!-- Modal detalle -->
+      <div class="modal-overlay" id="modal">
+        <div class="modal">
+          <div class="modal-header">
+            <h2 id="modal-title">Detalle</h2>
+            <button class="modal-close" onclick="closeModal()">✕</button>
+          </div>
+          <div id="modal-content"></div>
+        </div>
+      </div>
+
+      <script>
+        const CARRIERS = ${carrierListJSON};
+        let guardNombre = '';
+        let guardEmail = '';
+        let allTurnos = [];
+        let historialData = [];
+        let enrichingTurno = null;
+
+        // ===== LOGIN =====
+        document.getElementById('login-pass').addEventListener('keydown', e => { if(e.key==='Enter') doLogin(); });
+
+        async function doLogin() {
+          const email = document.getElementById('login-email').value.trim();
+          const pass = document.getElementById('login-pass').value;
+          if (!email || !pass) { showLoginError('Completá email y contraseña'); return; }
+
+          try {
+            const res = await fetch('/api/garita/login', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ email, password: pass })
+            });
+            const data = await res.json();
+            if (!data.success) { showLoginError(data.error); return; }
+
+            guardNombre = data.nombre;
+            guardEmail = data.email;
+            document.getElementById('guard-name-display').textContent = '🛡️ ' + guardNombre;
+            document.getElementById('login-section').style.display = 'none';
+            document.getElementById('main-panel').style.display = 'block';
+            loadKPIs();
+            document.getElementById('ing-truck').focus();
+          } catch(e) {
+            showLoginError('Error de conexión');
+          }
+        }
+
+        function showLoginError(msg) {
+          const el = document.getElementById('login-error');
+          el.textContent = msg; el.style.display = 'block';
+          setTimeout(() => el.style.display = 'none', 4000);
+        }
+
+        // ===== TABS =====
+        function showTab(tab, btn) {
+          document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+          if (btn) btn.classList.add('active');
+          document.getElementById('tab-ingreso').style.display = tab === 'ingreso' ? 'block' : 'none';
+          document.getElementById('tab-egreso').style.display = tab === 'egreso' ? 'block' : 'none';
+          document.getElementById('tab-historial').style.display = tab === 'historial' ? 'block' : 'none';
+          if (tab === 'historial') loadHistorial(7);
+        }
+
+        // ===== KPIs =====
+        async function loadKPIs() {
+          try {
+            const res = await fetch('/api/turnos');
+            const data = await res.json();
+            allTurnos = data.turnos || [];
+
+            const enPredio = allTurnos.filter(t => t.status !== 'EGRESADO').length;
+            const today = new Date().toDateString();
+            const ingresosHoy = allTurnos.filter(t => new Date(t.ts_entrada).toDateString() === today).length;
+            const egresosHoy = allTurnos.filter(t => t.status === 'EGRESADO' && t.ts_egreso && new Date(t.ts_egreso).toDateString() === today).length;
+
+            document.getElementById('kpis-garita').innerHTML =
+              '<div class="kpi"><div class="kpi-value">' + enPredio + '</div><div class="kpi-label">En predio</div></div>' +
+              '<div class="kpi"><div class="kpi-value">' + ingresosHoy + '</div><div class="kpi-label">Ingresos hoy</div></div>' +
+              '<div class="kpi"><div class="kpi-value">' + egresosHoy + '</div><div class="kpi-label">Egresos hoy</div></div>';
+          } catch(e) { console.error(e); }
+        }
+
+        // ===== COMBOBOX CARRIERS =====
+        let carrierHighlight = -1;
+
+        function filterCarriers() {
+          const val = document.getElementById('ing-carrier').value.toLowerCase();
+          const list = document.getElementById('carrier-list');
+          const filtered = CARRIERS.filter(c => c.toLowerCase().includes(val));
+          carrierHighlight = -1;
+
+          if (filtered.length === 0 || !val) { list.classList.remove('open'); return; }
+
+          list.innerHTML = filtered.map(c =>
+            '<div class="carrier-item" onclick="selectCarrier(\\'' + c.replace(/'/g, "\\\\'") + '\\')">' + c + '</div>'
+          ).join('');
+          list.classList.add('open');
+        }
+
+        function selectCarrier(name) {
+          document.getElementById('ing-carrier').value = name;
+          document.getElementById('carrier-list').classList.remove('open');
+        }
+
+        document.addEventListener('click', e => {
+          if (!e.target.closest('.carrier-dropdown')) {
+            document.getElementById('carrier-list').classList.remove('open');
+          }
+        });
+
+        document.getElementById('ing-carrier').addEventListener('keydown', e => {
+          const list = document.getElementById('carrier-list');
+          const items = list.querySelectorAll('.carrier-item');
+          if (!list.classList.contains('open') || items.length === 0) return;
+
+          if (e.key === 'ArrowDown') { e.preventDefault(); carrierHighlight = Math.min(carrierHighlight + 1, items.length - 1); updateCarrierHighlight(items); }
+          else if (e.key === 'ArrowUp') { e.preventDefault(); carrierHighlight = Math.max(carrierHighlight - 1, 0); updateCarrierHighlight(items); }
+          else if (e.key === 'Enter' && carrierHighlight >= 0) { e.preventDefault(); items[carrierHighlight].click(); }
+        });
+
+        function updateCarrierHighlight(items) {
+          items.forEach((it, i) => it.classList.toggle('highlighted', i === carrierHighlight));
+          if (items[carrierHighlight]) items[carrierHighlight].scrollIntoView({ block: 'nearest' });
+        }
+
+        // ===== CHECK PATENTE (auto-check on blur) =====
+        async function checkPatente() {
+          const truck = document.getElementById('ing-truck').value.trim().toUpperCase();
+          const banner = document.getElementById('ingreso-banner');
+          enrichingTurno = null;
+          banner.innerHTML = '';
+
+          if (!truck || truck.length < 3) return;
+
+          try {
+            const res = await fetch('/api/garita/check-duplicado/' + encodeURIComponent(truck));
+            const data = await res.json();
+
+            if (data.exists) {
+              const turno = data.turnos[0];
+              if ((data.registrado_por || 'driver') === 'driver') {
+                enrichingTurno = turno;
+                banner.innerHTML = '<div class="banner-info">ℹ️ Vehículo ya registrado por el chofer (turno ' + turno.turno_id + '). Se completarán los datos de garita.</div>';
+                if (turno.carrier) document.getElementById('ing-carrier').value = turno.carrier;
+                if (turno.warehouse) document.getElementById('ing-nave').value = turno.warehouse;
+              } else {
+                banner.innerHTML = '<div class="banner-error">⚠️ Vehículo ya registrado en predio por garita. Registrá el egreso primero.</div>';
+              }
+            }
+          } catch(e) { console.error(e); }
+        }
+
+        // ===== REGISTRAR INGRESO =====
+        async function registrarIngreso() {
+          const truck = document.getElementById('ing-truck').value.trim().toUpperCase();
+          const carrier = document.getElementById('ing-carrier').value.trim();
+          const chofer = document.getElementById('ing-chofer').value.trim();
+
+          if (!truck || !carrier || !chofer) {
+            showIngresoError('Completá patente, transportista y nombre del chofer');
+            return;
+          }
+
+          const btn = document.getElementById('btn-ingreso');
+          btn.disabled = true; btn.textContent = '⏳ Procesando...';
+
+          try {
+            const res = await fetch('/api/garita/entrada', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                truck,
+                carrier,
+                chofer,
+                dni_chofer: document.getElementById('ing-dni').value.trim(),
+                celular_chofer: document.getElementById('ing-celular').value.trim(),
+                patente_semi: document.getElementById('ing-semi').value.trim().toUpperCase(),
+                contenedor: document.getElementById('ing-contenedor').value.trim(),
+                precinto: document.getElementById('ing-precinto').value.trim(),
+                warehouse: document.getElementById('ing-nave').value,
+                obs_ingreso: document.getElementById('ing-obs').value.trim(),
+                viaje_hdr: document.getElementById('ing-viaje').value.trim(),
+                registrado_por: guardEmail
+              })
+            });
+            const data = await res.json();
+
+            if (!data.success) { showIngresoError(data.error); return; }
+
+            const msg = data.enriched
+              ? '✅ Turno ' + data.turno_id + ' enriquecido con datos de garita'
+              : '✅ Ingreso registrado: ' + data.turno_id;
+            showToast(msg);
+            resetIngresoForm();
+            loadKPIs();
+          } catch(e) {
+            showIngresoError('Error de conexión');
+          } finally {
+            btn.disabled = false; btn.textContent = 'Registrar Ingreso';
+          }
+        }
+
+        function showIngresoError(msg) {
+          const el = document.getElementById('ingreso-error');
+          el.textContent = msg; el.style.display = 'block';
+          setTimeout(() => el.style.display = 'none', 5000);
+        }
+
+        function resetIngresoForm() {
+          ['ing-truck','ing-carrier','ing-chofer','ing-dni','ing-celular','ing-semi','ing-contenedor','ing-precinto','ing-viaje'].forEach(id => {
+            document.getElementById(id).value = '';
+          });
+          document.getElementById('ing-nave').value = '';
+          document.getElementById('ing-obs').value = '';
+          document.getElementById('ingreso-banner').innerHTML = '';
+          enrichingTurno = null;
+          document.getElementById('ing-truck').focus();
+        }
+
+        // ===== BUSCAR PARA EGRESO =====
+        let egresoTurno = null;
+
+        async function buscarParaEgreso() {
+          const truck = document.getElementById('egr-truck').value.trim().toUpperCase();
+          if (!truck) return;
+
+          const errorEl = document.getElementById('egreso-error');
+          const resultEl = document.getElementById('egreso-result');
+          errorEl.style.display = 'none';
+          resultEl.style.display = 'none';
+          egresoTurno = null;
+
+          try {
+            const res = await fetch('/api/garita/check-duplicado/' + encodeURIComponent(truck));
+            const data = await res.json();
+
+            if (!data.exists) {
+              errorEl.textContent = 'No se encontró vehículo activo con patente ' + truck;
+              errorEl.style.display = 'block';
+              return;
+            }
+
+            const t = data.turnos[0];
+            egresoTurno = t;
+
+            const tiempoMs = Date.now() - new Date(t.ts_entrada).getTime();
+            const hrs = Math.floor(tiempoMs / 3600000);
+            const mins = Math.floor((tiempoMs % 3600000) / 60000);
+            const tiempoStr = hrs > 0 ? hrs + 'h ' + mins + 'm' : mins + ' min';
+
+            document.getElementById('egreso-info').innerHTML =
+              '<div class="row"><span class="label">Patente</span><span class="value">' + t.truck + '</span></div>' +
+              '<div class="row"><span class="label">Transportista</span><span class="value">' + (t.carrier || '-') + '</span></div>' +
+              '<div class="row"><span class="label">Chofer</span><span class="value">' + (t.chofer || '-') + '</span></div>' +
+              '<div class="row"><span class="label">Tiempo en predio</span><span class="value">' + tiempoStr + '</span></div>' +
+              '<div class="row"><span class="label">Estado actual</span><span class="value">' + getStatusBadge(t.status) + '</span></div>' +
+              '<div class="row"><span class="label">Ingreso</span><span class="value">' + formatDateTime(t.ts_entrada) + '</span></div>';
+
+            resultEl.style.display = 'block';
+          } catch(e) {
+            errorEl.textContent = 'Error de conexión';
+            errorEl.style.display = 'block';
+          }
+        }
+
+        async function confirmarEgreso() {
+          if (!egresoTurno) return;
+
+          const btn = document.getElementById('btn-egreso');
+          btn.disabled = true; btn.textContent = '⏳ Procesando...';
+
+          try {
+            const res = await fetch('/api/garita/salida', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                truck: egresoTurno.truck,
+                obs_egreso: document.getElementById('egr-obs').value.trim()
+              })
+            });
+            const data = await res.json();
+
+            if (!data.success) {
+              document.getElementById('egreso-error').textContent = data.error;
+              document.getElementById('egreso-error').style.display = 'block';
+              return;
+            }
+
+            const turno = data.turno;
+            const tiempoMs = new Date(turno.ts_egreso).getTime() - new Date(turno.ts_entrada).getTime();
+            const hrs = Math.floor(tiempoMs / 3600000);
+            const mins = Math.floor((tiempoMs % 3600000) / 60000);
+            showToast('✅ Egreso confirmado — ' + turno.truck + ' (' + (hrs > 0 ? hrs + 'h ' : '') + mins + 'm en predio)');
+
+            document.getElementById('egr-truck').value = '';
+            document.getElementById('egr-obs').value = '';
+            document.getElementById('egreso-result').style.display = 'none';
+            egresoTurno = null;
+            loadKPIs();
+          } catch(e) {
+            document.getElementById('egreso-error').textContent = 'Error de conexión';
+            document.getElementById('egreso-error').style.display = 'block';
+          } finally {
+            btn.disabled = false; btn.textContent = 'Confirmar Egreso';
+          }
+        }
+
+        // ===== HISTORIAL =====
+        let currentDays = 7;
+
+        async function loadHistorial(days, btn) {
+          if (days !== undefined) currentDays = days;
+          if (btn) {
+            document.querySelectorAll('.range-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+          }
+
+          const d = currentDays === 0 ? 1 : currentDays;
+          try {
+            const res = await fetch('/api/garita/historial?days=' + d);
+            const data = await res.json();
+            historialData = data.turnos || [];
+
+            if (currentDays === 0) {
+              const today = new Date().toDateString();
+              historialData = historialData.filter(t => new Date(t.ts_entrada).toDateString() === today);
+            }
+
+            renderHistorial();
+          } catch(e) { console.error(e); }
+        }
+
+        function filterHistorial() {
+          renderHistorial();
+        }
+
+        function renderHistorial() {
+          const filter = (document.getElementById('hist-filter').value || '').toUpperCase();
+          let filtered = historialData;
+          if (filter) filtered = filtered.filter(t => t.truck.toUpperCase().includes(filter));
+
+          const tbody = document.getElementById('hist-body');
+          if (filtered.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="8" style="text-align:center; opacity:0.5; padding:24px;">Sin registros</td></tr>';
+            return;
+          }
+
+          tbody.innerHTML = filtered.map(t =>
+            '<tr onclick="showDetail(\\'' + t.turno_id + '\\')" style="cursor:pointer;">' +
+            '<td>' + formatDateTime(t.ts_entrada) + '</td>' +
+            '<td style="font-weight:600;">' + t.truck + '</td>' +
+            '<td>' + (t.patente_semi || '-') + '</td>' +
+            '<td>' + (t.chofer || '-') + '</td>' +
+            '<td>' + (t.carrier || '-') + '</td>' +
+            '<td>' + (t.warehouse || '-') + '</td>' +
+            '<td>' + getStatusBadge(t.status) + '</td>' +
+            '<td>' + (t.obs_ingreso || '-') + '</td></tr>'
+          ).join('');
+        }
+
+        // ===== MODAL DETALLE (reutilizado de /garita) =====
+        function showDetail(turnoId) {
+          const t = (historialData.length > 0 ? historialData : allTurnos).find(x => x.turno_id === turnoId);
+          if (!t) return;
+
+          document.getElementById('modal-title').textContent = t.truck + ' — ' + (t.carrier || '');
+
+          let html = '<div style="margin-bottom:16px;">';
+          if (t.chofer) html += '<div class="row" style="display:flex; justify-content:space-between; margin-bottom:6px;"><span style="opacity:0.6;">Chofer</span><span style="font-weight:600;">' + t.chofer + '</span></div>';
+          if (t.dni_chofer) html += '<div class="row" style="display:flex; justify-content:space-between; margin-bottom:6px;"><span style="opacity:0.6;">DNI</span><span>' + t.dni_chofer + '</span></div>';
+          if (t.celular_chofer) html += '<div class="row" style="display:flex; justify-content:space-between; margin-bottom:6px;"><span style="opacity:0.6;">Celular</span><span>' + t.celular_chofer + '</span></div>';
+          if (t.patente_semi) html += '<div class="row" style="display:flex; justify-content:space-between; margin-bottom:6px;"><span style="opacity:0.6;">Semi</span><span>' + t.patente_semi + '</span></div>';
+          if (t.contenedor) html += '<div class="row" style="display:flex; justify-content:space-between; margin-bottom:6px;"><span style="opacity:0.6;">Contenedor</span><span>' + t.contenedor + '</span></div>';
+          if (t.precinto) html += '<div class="row" style="display:flex; justify-content:space-between; margin-bottom:6px;"><span style="opacity:0.6;">Precinto</span><span>' + t.precinto + '</span></div>';
+          html += '</div>';
+
+          html += '<div class="timeline">';
+          html += renderTimelineItem(t.ts_entrada, 'Ingreso registrado');
+          html += renderTimelineItem(t.ts_asignacion, 'Dársena asignada' + (t.dock ? ': ' + t.dock : ''));
+          html += renderTimelineItem(t.ts_atracado, 'Atracado');
+          html += renderTimelineItem(t.ts_desatracado, 'Desatracado');
+          html += renderTimelineItem(t.ts_egreso, 'Egreso');
+          html += '</div>';
+
+          if (t.obs_ingreso) html += '<div style="margin-top:12px; padding:10px; background:rgba(255,255,255,0.05); border-radius:8px; font-size:13px;"><strong>Obs. Ingreso:</strong> ' + t.obs_ingreso + '</div>';
+          if (t.obs_egreso) html += '<div style="margin-top:8px; padding:10px; background:rgba(255,255,255,0.05); border-radius:8px; font-size:13px;"><strong>Obs. Egreso:</strong> ' + t.obs_egreso + '</div>';
+
+          document.getElementById('modal-content').innerHTML = html;
+          document.getElementById('modal').classList.add('active');
+        }
+
+        function renderTimelineItem(ts, text) {
+          const done = ts ? 'done' : '';
+          return '<div class="timeline-item ' + done + '">' +
+            '<div class="timeline-time">' + formatDateTime(ts) + '</div>' +
+            '<div class="timeline-text">' + text + '</div></div>';
+        }
+
+        function closeModal() { document.getElementById('modal').classList.remove('active'); }
+
+        document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+        document.getElementById('modal').addEventListener('click', e => { if (e.target === document.getElementById('modal')) closeModal(); });
+
+        // ===== UTILS =====
+        function getStatusBadge(status) {
+          const badges = {
+            'ESPERANDO_ASIGNACION': '<span class="badge badge-yellow">Esperando</span>',
+            'DARSENA_ASIGNADA': '<span class="badge badge-primary">Asignada</span>',
+            'ATRACADO': '<span class="badge badge-green">Atracado</span>',
+            'DESATRACADO': '<span class="badge badge-orange">Desatracado</span>',
+            'EGRESADO': '<span class="badge badge-dark">Egresado</span>'
+          };
+          return badges[status] || status;
+        }
+
+        function formatTime(ts) {
+          if (!ts) return '--:--';
+          return new Date(ts).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
+        }
+
+        function formatDateTime(ts) {
+          if (!ts) return '--:--';
+          return new Date(ts).toLocaleString('es-AR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+        }
+
+        function showToast(msg) {
+          const toast = document.getElementById('toast');
+          toast.textContent = msg;
+          toast.classList.add('active');
+          setTimeout(() => toast.classList.remove('active'), 4000);
+        }
+
+        // ===== AUTO-REFRESH =====
+        setInterval(loadKPIs, 10000);
+      </script>
+    </body></html>
+  `);
+});
+
 // ==================== PÁGINA ADMIN (OCULTA) ====================
 // ==================== PÁGINA ADMIN (OCULTA) ====================
 app.get('/admin', (req, res) => {
@@ -2940,6 +3759,40 @@ app.get('/setup-db', async (req, res) => {
     res.send('✅ Base de datos actualizada');
   } catch(e) {
     res.send('❌ Error: ' + e.message);
+  }
+});
+
+// ===================== MIGRACIÓN V2: CAMPOS GARITA =====================
+app.get('/setup-db-v2', async (req, res) => {
+  try {
+    await pool.query(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS chofer VARCHAR(100)`);
+    await pool.query(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS dni_chofer VARCHAR(20)`);
+    await pool.query(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS celular_chofer VARCHAR(20)`);
+    await pool.query(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS patente_semi VARCHAR(20)`);
+    await pool.query(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS contenedor VARCHAR(30)`);
+    await pool.query(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS precinto VARCHAR(30)`);
+    await pool.query(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS obs_ingreso TEXT`);
+    await pool.query(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS obs_egreso TEXT`);
+    await pool.query(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS registrado_por VARCHAR(20) DEFAULT 'driver'`);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS garita_usuarios (
+        id SERIAL PRIMARY KEY,
+        email VARCHAR(100) UNIQUE NOT NULL,
+        password VARCHAR(100) NOT NULL,
+        nombre VARCHAR(100) NOT NULL,
+        activo BOOLEAN DEFAULT true
+      )
+    `);
+    await pool.query(`
+      INSERT INTO garita_usuarios (email, password, nombre)
+      VALUES ('guardia@ocasa.com', 'garita2026', 'Guardia 1')
+      ON CONFLICT (email) DO NOTHING
+    `);
+
+    res.json({ success: true, message: 'Migración V2 completada: campos garita + tabla usuarios' });
+  } catch(e) {
+    res.json({ success: false, error: e.message });
   }
 });
 
