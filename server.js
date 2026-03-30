@@ -11,12 +11,32 @@ app.use('/public', express.static(path.join(__dirname, 'public')));
 // ===================== BASE DE DATOS POSTGRESQL =====================
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL || 'postgresql://localhost:5432/dock',
-  ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false
+  ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false,
+  max: 10,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 5000,
+  allowExitOnIdle: true
 });
 
 pool.on('error', (err) => {
-  console.error('⚠️ DB pool error (ignorado):', err.message);
+  console.error('⚠️ DB pool error — conexión eliminada:', err.message);
 });
+
+// Helper: ejecuta queries dentro de una transacción explícita
+async function withTransaction(callback) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await callback(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
 
 // Inicializar tabla
 async function initDB() {
@@ -452,36 +472,46 @@ app.get('/api/turnos', async (req, res) => {
 // Asignar dársena
 app.post('/api/asignar', async (req, res) => {
   const { turnoId, dock, warehouse } = req.body;
-  
+
   try {
-    const turno = await pool.query('SELECT * FROM turnos WHERE turno_id = $1', [turnoId]);
-    if (turno.rows.length === 0) {
-      return res.json({ success: false, error: 'Turno no encontrado' });
-    }
-    
-    if (turno.rows[0].status !== 'ESPERANDO_ASIGNACION') {
-      return res.json({ success: false, error: 'El turno ya tiene dársena asignada' });
-    }
-    
-    // Verificar que el dock no esté ocupado
-    const dockCheck = await pool.query(
-      "SELECT * FROM turnos WHERE dock = $1 AND status NOT IN ('EGRESADO', 'DESATRACADO')",
-      [dock]
-    );
-    
-    if (dockCheck.rows.length > 0) {
-      return res.json({ success: false, error: 'Esa dársena ya está ocupada' });
-    }
-    
-    await pool.query(
-      `UPDATE turnos SET dock = $1, warehouse = $2, status = 'DARSENA_ASIGNADA', ts_asignacion = CURRENT_TIMESTAMP 
-       WHERE turno_id = $3`,
-      [dock, warehouse, turnoId]
-    );
-    
-    res.json({ success: true });
+    const result = await withTransaction(async (client) => {
+      const turno = await client.query('SELECT * FROM turnos WHERE turno_id = $1 FOR UPDATE', [turnoId]);
+      if (turno.rows.length === 0) {
+        return { success: false, error: 'Turno no encontrado' };
+      }
+
+      const t = turno.rows[0];
+
+      // Idempotente: si ya está asignado a la misma dársena, éxito (evita error por doble-click)
+      if (t.status === 'DARSENA_ASIGNADA' && t.dock === dock) {
+        return { success: true };
+      }
+
+      if (t.status !== 'ESPERANDO_ASIGNACION') {
+        return { success: false, error: 'El turno ya tiene dársena asignada (' + t.dock + '). Refrescá la pantalla.' };
+      }
+
+      // Verificar que el dock no esté ocupado
+      const dockCheck = await client.query(
+        "SELECT truck FROM turnos WHERE dock = $1 AND status NOT IN ('EGRESADO', 'DESATRACADO') AND turno_id != $2",
+        [dock, turnoId]
+      );
+      if (dockCheck.rows.length > 0) {
+        return { success: false, error: 'Esa dársena ya está ocupada por ' + dockCheck.rows[0].truck };
+      }
+
+      await client.query(
+        `UPDATE turnos SET dock = $1, warehouse = $2, status = 'DARSENA_ASIGNADA', ts_asignacion = CURRENT_TIMESTAMP
+         WHERE turno_id = $3`,
+        [dock, warehouse, turnoId]
+      );
+
+      return { success: true };
+    });
+
+    res.json(result);
   } catch (err) {
-    console.error(err);
+    console.error('Error en /api/asignar:', err);
     res.json({ success: false, error: 'Error de base de datos' });
   }
 });
@@ -490,57 +520,60 @@ app.post('/api/asignar', async (req, res) => {
 app.post('/api/reasignar', async (req, res) => {
   const { turnoId, dock, warehouse } = req.body;
   try {
-    // Verificar que el dock no esté ocupado
-    const dockCheck = await pool.query(
-      "SELECT * FROM turnos WHERE dock = $1 AND status NOT IN ('EGRESADO', 'DESATRACADO')",
-      [dock]
-    );
-    
-    if (dockCheck.rows.length > 0) {
-      return res.json({ success: false, error: 'Esa dársena ya está ocupada' });
-    }
-    
-    await pool.query(
-      `UPDATE turnos SET dock = $1, warehouse = $2, status = 'DARSENA_ASIGNADA', ts_asignacion = CURRENT_TIMESTAMP, ts_atracado = NULL, ts_desatracado = NULL WHERE turno_id = $3`,
-      [dock, warehouse, turnoId]
-    );
-    res.json({ success: true });
+    const result = await withTransaction(async (client) => {
+      const dockCheck = await client.query(
+        "SELECT truck FROM turnos WHERE dock = $1 AND status NOT IN ('EGRESADO', 'DESATRACADO')",
+        [dock]
+      );
+      if (dockCheck.rows.length > 0) {
+        return { success: false, error: 'Esa dársena ya está ocupada por ' + dockCheck.rows[0].truck };
+      }
+
+      await client.query(
+        `UPDATE turnos SET dock = $1, warehouse = $2, status = 'DARSENA_ASIGNADA', ts_asignacion = CURRENT_TIMESTAMP, ts_atracado = NULL, ts_desatracado = NULL WHERE turno_id = $3`,
+        [dock, warehouse, turnoId]
+      );
+      return { success: true };
+    });
+
+    res.json(result);
   } catch(e) {
-    res.json({ success: false, error: e.message });
+    console.error('Error en /api/reasignar:', e);
+    res.json({ success: false, error: 'Error de base de datos' });
   }
 });
 
 // Atraque automático (escanear QR de dársena)
 app.post('/api/dock/:dockId', async (req, res) => {
   const dockId = req.params.dockId;
-  
+
   try {
-    const turno = await pool.query(
-      "SELECT * FROM turnos WHERE dock = $1 AND status NOT IN ('EGRESADO', 'DESATRACADO')",
-      [dockId]
-    );
-    
-    if (turno.rows.length === 0) {
-      return res.json({ success: false, error: 'No hay ningún camión asignado a esta dársena' });
-    }
-    
-    const t = turno.rows[0];
-    
-    if (t.status === 'DARSENA_ASIGNADA') {
-      await pool.query(
-        "UPDATE turnos SET status = 'ATRACADO', ts_atracado = CURRENT_TIMESTAMP WHERE turno_id = $1",
-        [t.turno_id]
+    const result = await withTransaction(async (client) => {
+      const turno = await client.query(
+        "SELECT * FROM turnos WHERE dock = $1 AND status NOT IN ('EGRESADO', 'DESATRACADO') FOR UPDATE",
+        [dockId]
       );
-      return res.json({ success: true, action: 'atracado', truck: t.truck });
-    } else if (t.status === 'ATRACADO') {
-      await pool.query(
-        "UPDATE turnos SET status = 'DESATRACADO', dock = '', ts_desatracado = CURRENT_TIMESTAMP WHERE turno_id = $1",
-        [t.turno_id]
-      );
-      // Buscar turno hermano con dársena asignada (flujo multi-nave)
-      let nextDock = null;
-      try {
-        const siblings = await pool.query(
+
+      if (turno.rows.length === 0) {
+        return { success: false, error: 'No hay ningún camión asignado a esta dársena' };
+      }
+
+      const t = turno.rows[0];
+
+      if (t.status === 'DARSENA_ASIGNADA') {
+        await client.query(
+          "UPDATE turnos SET status = 'ATRACADO', ts_atracado = CURRENT_TIMESTAMP WHERE turno_id = $1",
+          [t.turno_id]
+        );
+        return { success: true, action: 'atracado', truck: t.truck };
+      } else if (t.status === 'ATRACADO') {
+        await client.query(
+          "UPDATE turnos SET status = 'DESATRACADO', dock = '', ts_desatracado = CURRENT_TIMESTAMP WHERE turno_id = $1",
+          [t.turno_id]
+        );
+        // Buscar turno hermano con dársena asignada (flujo multi-nave)
+        let nextDock = null;
+        const siblings = await client.query(
           "SELECT * FROM turnos WHERE truck = $1 AND turno_id != $2 AND status IN ('DARSENA_ASIGNADA', 'ESPERANDO_ASIGNACION') ORDER BY status ASC LIMIT 1",
           [t.truck, t.turno_id]
         );
@@ -548,13 +581,15 @@ app.post('/api/dock/:dockId', async (req, res) => {
           const s = siblings.rows[0];
           nextDock = { dock: s.dock || null, warehouse: s.warehouse, tripNumber: s.trip_number, turnoId: s.turno_id };
         }
-      } catch(e) { /* ignorar */ }
-      return res.json({ success: true, action: 'desatracado', truck: t.truck, nextDock });
-    } else {
-      return res.json({ success: false, error: 'Estado no válido: ' + t.status });
-    }
+        return { success: true, action: 'desatracado', truck: t.truck, nextDock };
+      } else {
+        return { success: false, error: 'Estado no válido: ' + t.status };
+      }
+    });
+
+    res.json(result);
   } catch (err) {
-    console.error(err);
+    console.error('Error en /api/dock:', err);
     res.json({ success: false, error: 'Error de base de datos' });
   }
 });
@@ -562,25 +597,29 @@ app.post('/api/dock/:dockId', async (req, res) => {
 // Registrar salida
 app.post('/api/salida', async (req, res) => {
   const { truck } = req.body;
-  
+
   try {
-    const turno = await pool.query(
-      "SELECT * FROM turnos WHERE truck = $1 AND status = 'DESATRACADO'",
-      [truck.toUpperCase()]
-    );
-    
-    if (turno.rows.length === 0) {
-      return res.json({ success: false, error: 'No se encontró un turno desatracado para esa patente' });
-    }
-    
-    await pool.query(
-      "UPDATE turnos SET status = 'EGRESADO', ts_egreso = CURRENT_TIMESTAMP WHERE turno_id = $1",
-      [turno.rows[0].turno_id]
-    );
-    
-    res.json({ success: true, turno: turno.rows[0] });
+    const result = await withTransaction(async (client) => {
+      const turno = await client.query(
+        "SELECT * FROM turnos WHERE truck = $1 AND status = 'DESATRACADO' FOR UPDATE",
+        [truck.toUpperCase()]
+      );
+
+      if (turno.rows.length === 0) {
+        return { success: false, error: 'No se encontró un turno desatracado para esa patente' };
+      }
+
+      await client.query(
+        "UPDATE turnos SET status = 'EGRESADO', ts_egreso = CURRENT_TIMESTAMP WHERE turno_id = $1",
+        [turno.rows[0].turno_id]
+      );
+
+      return { success: true, turno: turno.rows[0] };
+    });
+
+    res.json(result);
   } catch (err) {
-    console.error(err);
+    console.error('Error en /api/salida:', err);
     res.json({ success: false, error: 'Error de base de datos' });
   }
 });
@@ -634,45 +673,47 @@ app.post('/api/garita/entrada', async (req, res) => {
 
     const patenteUpper = truck.toUpperCase().trim();
 
-    // Check duplicado
-    const existing = await pool.query(
-      "SELECT * FROM turnos WHERE UPPER(truck)=$1 AND status != 'EGRESADO' ORDER BY ts_entrada DESC LIMIT 1",
-      [patenteUpper]
-    );
+    const result = await withTransaction(async (client) => {
+      // Check duplicado
+      const existing = await client.query(
+        "SELECT * FROM turnos WHERE UPPER(truck)=$1 AND status != 'EGRESADO' ORDER BY ts_entrada DESC LIMIT 1",
+        [patenteUpper]
+      );
 
-    if (existing.rows.length > 0) {
-      const turno = existing.rows[0];
-      if ((turno.registrado_por || 'driver') === 'driver') {
-        // Enriquecer turno existente del chofer
-        await pool.query(
-          `UPDATE turnos SET chofer=$1, dni_chofer=$2, celular_chofer=$3, patente_semi=$4,
-           contenedor=$5, precinto=$6, obs_ingreso=$7, registrado_por='guardia'
-           WHERE id=$8`,
-          [chofer, dni_chofer || null, celular_chofer || null, patente_semi ? patente_semi.toUpperCase() : null,
-           contenedor || null, precinto || null, obs_ingreso || null, turno.id]
-        );
-        return res.json({ success: true, turno_id: turno.turno_id, enriched: true });
-      } else {
-        return res.json({ success: false, error: 'Vehículo ya registrado en predio por garita' });
+      if (existing.rows.length > 0) {
+        const turno = existing.rows[0];
+        if ((turno.registrado_por || 'driver') === 'driver') {
+          await client.query(
+            `UPDATE turnos SET chofer=$1, dni_chofer=$2, celular_chofer=$3, patente_semi=$4,
+             contenedor=$5, precinto=$6, obs_ingreso=$7, registrado_por='guardia'
+             WHERE id=$8`,
+            [chofer, dni_chofer || null, celular_chofer || null, patente_semi ? patente_semi.toUpperCase() : null,
+             contenedor || null, precinto || null, obs_ingreso || null, turno.id]
+          );
+          return { success: true, turno_id: turno.turno_id, enriched: true };
+        } else {
+          return { success: false, error: 'Vehículo ya registrado en predio por garita' };
+        }
       }
-    }
 
-    // Crear nuevo turno
-    const countResult = await pool.query('SELECT COUNT(*) FROM turnos');
-    const turnoId = 'TRN-' + String(parseInt(countResult.rows[0].count) + 1).padStart(4, '0');
+      const countResult = await client.query('SELECT COUNT(*) FROM turnos');
+      const turnoId = 'TRN-' + String(parseInt(countResult.rows[0].count) + 1).padStart(4, '0');
 
-    await pool.query(
-      `INSERT INTO turnos (turno_id, truck, carrier, chofer, dni_chofer, celular_chofer, patente_semi,
-        contenedor, precinto, warehouse, obs_ingreso, trip_number, operation, type, status, ts_entrada, registrado_por)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'Descarga','INBOUND','ESPERANDO_ASIGNACION',CURRENT_TIMESTAMP,'guardia')`,
-      [turnoId, patenteUpper, carrier, chofer, dni_chofer || null, celular_chofer || null,
-       patente_semi ? patente_semi.toUpperCase() : null, contenedor || null, precinto || null,
-       warehouse || '', obs_ingreso || null, viaje_hdr || null]
-    );
+      await client.query(
+        `INSERT INTO turnos (turno_id, truck, carrier, chofer, dni_chofer, celular_chofer, patente_semi,
+          contenedor, precinto, warehouse, obs_ingreso, trip_number, operation, type, status, ts_entrada, registrado_por)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'Descarga','INBOUND','ESPERANDO_ASIGNACION',CURRENT_TIMESTAMP,'guardia')`,
+        [turnoId, patenteUpper, carrier, chofer, dni_chofer || null, celular_chofer || null,
+         patente_semi ? patente_semi.toUpperCase() : null, contenedor || null, precinto || null,
+         warehouse || '', obs_ingreso || null, viaje_hdr || null]
+      );
 
-    res.json({ success: true, turno_id: turnoId, enriched: false });
+      return { success: true, turno_id: turnoId, enriched: false };
+    });
+
+    res.json(result);
   } catch (err) {
-    console.error(err);
+    console.error('Error en /api/garita/entrada:', err);
     res.json({ success: false, error: 'Error de base de datos' });
   }
 });
@@ -684,25 +725,30 @@ app.post('/api/garita/salida', async (req, res) => {
     if (!truck) return res.json({ success: false, error: 'Patente requerida' });
 
     const patenteUpper = truck.toUpperCase().trim();
-    const existing = await pool.query(
-      "SELECT * FROM turnos WHERE UPPER(truck)=$1 AND status != 'EGRESADO' ORDER BY ts_entrada DESC LIMIT 1",
-      [patenteUpper]
-    );
 
-    if (existing.rows.length === 0) {
-      return res.json({ success: false, error: 'No se encontró vehículo activo con esa patente' });
-    }
+    const result = await withTransaction(async (client) => {
+      const existing = await client.query(
+        "SELECT * FROM turnos WHERE UPPER(truck)=$1 AND status != 'EGRESADO' ORDER BY ts_entrada DESC LIMIT 1 FOR UPDATE",
+        [patenteUpper]
+      );
 
-    const turno = existing.rows[0];
-    await pool.query(
-      "UPDATE turnos SET status='EGRESADO', ts_egreso=CURRENT_TIMESTAMP, obs_egreso=$1 WHERE id=$2",
-      [obs_egreso || null, turno.id]
-    );
+      if (existing.rows.length === 0) {
+        return { success: false, error: 'No se encontró vehículo activo con esa patente' };
+      }
 
-    const updated = await pool.query('SELECT * FROM turnos WHERE id=$1', [turno.id]);
-    res.json({ success: true, turno: updated.rows[0] });
+      const turno = existing.rows[0];
+      await client.query(
+        "UPDATE turnos SET status='EGRESADO', ts_egreso=CURRENT_TIMESTAMP, obs_egreso=$1 WHERE id=$2",
+        [obs_egreso || null, turno.id]
+      );
+
+      const updated = await client.query('SELECT * FROM turnos WHERE id=$1', [turno.id]);
+      return { success: true, turno: updated.rows[0] };
+    });
+
+    res.json(result);
   } catch (err) {
-    console.error(err);
+    console.error('Error en /api/garita/salida:', err);
     res.json({ success: false, error: 'Error de base de datos' });
   }
 });
@@ -3733,12 +3779,14 @@ app.post('/api/admin/eliminar', async (req, res) => {
 app.post('/api/admin/editar', async (req, res) => {
   const { turnoId, truck, carrier, tripNumber, warehouse, operation, dock, pass } = req.body;
   if (pass !== 'Newsanpilar2026') return res.json({ success: false, error: 'No autorizado' });
-  
+
   try {
-    await pool.query(
-      `UPDATE turnos SET truck = $1, carrier = $2, trip_number = $3, warehouse = $4, operation = $5, dock = $6 WHERE turno_id = $7`,
-      [truck.toUpperCase(), carrier, tripNumber || null, warehouse, operation, dock || null, turnoId]
-    );
+    await withTransaction(async (client) => {
+      await client.query(
+        `UPDATE turnos SET truck = $1, carrier = $2, trip_number = $3, warehouse = $4, operation = $5, dock = $6 WHERE turno_id = $7`,
+        [truck.toUpperCase(), carrier, tripNumber || null, warehouse, operation, dock || null, turnoId]
+      );
+    });
     res.json({ success: true });
   } catch(e) {
     res.json({ success: false, error: e.message });
