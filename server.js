@@ -3798,6 +3798,61 @@ app.listen(PORT, () => {
 });
 
 
+// Diagnóstico de DB
+app.get('/db-check', async (req, res) => {
+  const turnoId = req.query.turno || 'TRN-0858';
+  const results = [];
+
+  try {
+    // Test 1: Read via pool.query
+    const r1 = await pool.query('SELECT turno_id, status, dock FROM turnos WHERE turno_id = $1', [turnoId]);
+    results.push({ test: 'pool.query READ', data: r1.rows[0] || 'NOT FOUND' });
+
+    // Test 2: Read via dedicated client
+    const client = await pool.connect();
+    try {
+      const r2 = await client.query('SELECT turno_id, status, dock FROM turnos WHERE turno_id = $1', [turnoId]);
+      results.push({ test: 'client READ', data: r2.rows[0] || 'NOT FOUND' });
+
+      // Test 3: Transaction test — UPDATE and verify within same client
+      await client.query('BEGIN');
+      await client.query("UPDATE turnos SET dock = 'TEST' WHERE turno_id = $1", [turnoId]);
+      const r3 = await client.query('SELECT dock FROM turnos WHERE turno_id = $1', [turnoId]);
+      results.push({ test: 'client UPDATE+READ (in tx)', dock_after_update: r3.rows[0]?.dock });
+      await client.query('ROLLBACK'); // No persistir cambio de test
+
+      // Test 4: Verify ROLLBACK worked
+      const r4 = await client.query('SELECT dock FROM turnos WHERE turno_id = $1', [turnoId]);
+      results.push({ test: 'client after ROLLBACK', dock: r4.rows[0]?.dock });
+    } finally {
+      client.release();
+    }
+
+    // Test 5: Pool info
+    results.push({
+      test: 'pool_info',
+      totalCount: pool.totalCount,
+      idleCount: pool.idleCount,
+      waitingCount: pool.waitingCount
+    });
+
+    // Test 6: Check PostgreSQL config
+    const pgVersion = await pool.query('SHOW server_version');
+    const txIsolation = await pool.query('SHOW default_transaction_isolation');
+    const txReadOnly = await pool.query('SHOW default_transaction_read_only');
+    results.push({
+      test: 'pg_config',
+      version: pgVersion.rows[0].server_version,
+      isolation: txIsolation.rows[0].default_transaction_isolation,
+      read_only: txReadOnly.rows[0].default_transaction_read_only
+    });
+
+    res.json({ ok: true, results });
+  } catch(e) {
+    res.json({ ok: false, error: e.message, results });
+  }
+});
+
 app.get('/setup-db', async (req, res) => {
   try {
     await pool.query(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS trip_number VARCHAR(50)`);
