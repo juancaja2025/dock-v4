@@ -2935,7 +2935,7 @@ app.get('/garita-registro', (req, res) => {
         .carrier-dropdown { position: relative; }
         .carrier-list { position: absolute; top: 100%; left: 0; right: 0; max-height: 200px; overflow-y: auto; background: ${colors.darkBlue}; border: 1px solid rgba(255,255,255,0.15); border-radius: 0 0 12px 12px; z-index: 100; display: none; }
         .carrier-list.open { display: block; }
-        .carrier-item { padding: 12px 16px; cursor: pointer; font-size: 15px; }
+        .carrier-item { padding: 12px 16px; cursor: pointer; font-size: 15px; color: ${colors.light}; }
         .carrier-item:hover { background: rgba(0,153,168,0.2); }
         .carrier-item.highlighted { background: rgba(0,153,168,0.15); }
         @media (max-width: 768px) {
@@ -3271,12 +3271,13 @@ app.get('/garita-registro', (req, res) => {
           if (!truck || truck.length < 3) return;
 
           try {
-            const res = await fetch('/api/garita/check-duplicado/' + encodeURIComponent(truck));
-            const data = await res.json();
+            // 1. Check duplicado en predio
+            const dupRes = await fetch('/api/garita/check-duplicado/' + encodeURIComponent(truck));
+            const dupData = await dupRes.json();
 
-            if (data.exists) {
-              const turno = data.turnos[0];
-              if ((data.registrado_por || 'driver') === 'driver') {
+            if (dupData.exists) {
+              const turno = dupData.turnos[0];
+              if ((dupData.registrado_por || 'driver') === 'driver') {
                 enrichingTurno = turno;
                 banner.innerHTML = '<div class="banner-info">ℹ️ Vehículo ya registrado por el chofer (turno ' + turno.turno_id + '). Se completarán los datos de garita.</div>';
                 if (turno.carrier) document.getElementById('ing-carrier').value = turno.carrier;
@@ -3284,8 +3285,54 @@ app.get('/garita-registro', (req, res) => {
               } else {
                 banner.innerHTML = '<div class="banner-error">⚠️ Vehículo ya registrado en predio por garita. Registrá el egreso primero.</div>';
               }
+              return;
             }
-          } catch(e) { console.error(e); }
+
+            // 2. Buscar viajes programados para hoy (Google Sheets)
+            const patenteClean = truck.replace(/[-\\s]/g, '');
+            if (patenteClean.length < 5) return;
+
+            banner.innerHTML = '<div class="banner-info">🔍 Buscando viajes programados para esta patente...</div>';
+
+            const sheetRes = await fetch('/api/buscar-patente/' + encodeURIComponent(patenteClean));
+            const sheetData = await sheetRes.json();
+
+            if (sheetData.found && sheetData.trips && sheetData.trips.length > 0) {
+              const trips = sheetData.trips;
+              const count = trips.length;
+              const naves = [...new Set(trips.map(t => t.warehouse || t.deposito).filter(Boolean))].join(', ');
+
+              // Auto-completar transportista
+              const firstCarrier = trips.find(t => t.transporte);
+              if (firstCarrier) document.getElementById('ing-carrier').value = firstCarrier.transporte;
+
+              // Auto-completar nave (si hay una sola)
+              if (trips.length === 1 && trips[0].warehouse) {
+                document.getElementById('ing-nave').value = trips[0].warehouse;
+              }
+
+              // Auto-completar viaje (si hay uno solo)
+              if (trips.length === 1 && trips[0].tripNumber) {
+                document.getElementById('ing-viaje').value = trips[0].tripNumber;
+              }
+
+              // Mostrar banner con viajes encontrados
+              let tripHtml = '<div class="banner-info" style="margin-bottom:0;">✅ ' + count + ' viaje' + (count > 1 ? 's' : '') + ' encontrado' + (count > 1 ? 's' : '') + ' para hoy — Nave' + (count > 1 ? 's' : '') + ': ' + naves + '</div>';
+              if (count > 1) {
+                tripHtml += '<div style="margin-top:8px;">';
+                trips.forEach(t => {
+                  tripHtml += '<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:rgba(0,153,168,0.08);border-radius:6px;margin-top:4px;font-size:13px;">';
+                  tripHtml += '<span>📦 Viaje ' + (t.tripNumber || 'S/N') + '</span>';
+                  if (t.warehouse) tripHtml += '<span style="margin-left:auto;font-weight:700;color:${colors.primary};">' + t.warehouse + '</span>';
+                  tripHtml += '</div>';
+                });
+                tripHtml += '</div>';
+              }
+              banner.innerHTML = tripHtml;
+            } else {
+              banner.innerHTML = '<div style="background:rgba(255,171,64,0.12);border:1px solid rgba(255,171,64,0.3);color:#ffab40;padding:10px 12px;border-radius:8px;font-size:13px;">⚠️ Sin viajes programados para hoy. Completá los datos manualmente.</div>';
+            }
+          } catch(e) { console.error(e); banner.innerHTML = ''; }
         }
 
         // ===== REGISTRAR INGRESO =====
