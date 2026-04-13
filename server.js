@@ -714,7 +714,7 @@ app.post('/api/garita/entrada', async (req, res) => {
     res.json(result);
   } catch (err) {
     console.error('Error en /api/garita/entrada:', err);
-    res.json({ success: false, error: 'Error de base de datos' });
+    res.json({ success: false, error: 'Error de base de datos: ' + err.message });
   }
 });
 
