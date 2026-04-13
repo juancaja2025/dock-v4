@@ -665,7 +665,7 @@ app.get('/api/garita/check-duplicado/:patente', async (req, res) => {
 app.post('/api/garita/entrada', async (req, res) => {
   try {
     const { truck, carrier, chofer, dni_chofer, celular_chofer, patente_semi,
-            contenedor, precinto, warehouse, obs_ingreso, viaje_hdr } = req.body;
+            contenedor, precinto, warehouse, obs_ingreso, viaje_hdr, carga_estado } = req.body;
 
     if (!truck || !carrier || !chofer) {
       return res.json({ success: false, error: 'Patente, transportista y chofer son requeridos' });
@@ -685,10 +685,10 @@ app.post('/api/garita/entrada', async (req, res) => {
         if ((turno.registrado_por || 'driver') === 'driver') {
           await client.query(
             `UPDATE turnos SET chofer=$1, dni_chofer=$2, celular_chofer=$3, patente_semi=$4,
-             contenedor=$5, precinto=$6, obs_ingreso=$7, registrado_por='guardia'
+             contenedor=$5, precinto=$6, obs_ingreso=$7, registrado_por='guardia', carga_estado=$9
              WHERE id=$8`,
             [chofer, dni_chofer || null, celular_chofer || null, patente_semi ? patente_semi.toUpperCase() : null,
-             contenedor || null, precinto || null, obs_ingreso || null, turno.id]
+             contenedor || null, precinto || null, obs_ingreso || null, turno.id, carga_estado || 'VACIO']
           );
           return { success: true, turno_id: turno.turno_id, enriched: true };
         } else {
@@ -701,11 +701,11 @@ app.post('/api/garita/entrada', async (req, res) => {
 
       await client.query(
         `INSERT INTO turnos (turno_id, truck, carrier, chofer, dni_chofer, celular_chofer, patente_semi,
-          contenedor, precinto, warehouse, obs_ingreso, trip_number, operation, type, status, ts_entrada, registrado_por)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'Descarga','INBOUND','ESPERANDO_ASIGNACION',CURRENT_TIMESTAMP,'guardia')`,
+          contenedor, precinto, warehouse, obs_ingreso, trip_number, operation, type, status, ts_entrada, registrado_por, carga_estado)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'Descarga','INBOUND','ESPERANDO_ASIGNACION',CURRENT_TIMESTAMP,'guardia',$13)`,
         [turnoId, patenteUpper, carrier, chofer, dni_chofer || null, celular_chofer || null,
          patente_semi ? patente_semi.toUpperCase() : null, contenedor || null, precinto || null,
-         warehouse || '', obs_ingreso || null, viaje_hdr || null]
+         warehouse || '', obs_ingreso || null, viaje_hdr || null, carga_estado || 'VACIO']
       );
 
       return { success: true, turno_id: turnoId, enriched: false };
@@ -1035,6 +1035,32 @@ app.get('/', (req, res) => {
 
 // ==================== PÁGINA ENTRADA (CHOFERES) ====================
 app.get('/entrada', (req, res) => {
+  res.send(`
+    <!DOCTYPE html>
+    <html><head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      ${fontLink}
+      <title>Registro de Ingreso - OCASA</title>
+      <style>${styles}</style>
+    </head><body>
+      <div class="container" style="text-align:center; padding-top:80px;">
+        <img src="${logoSrc}" alt="OCASA" class="logo-large">
+        <div class="icon-circle icon-primary" style="margin:0 auto 24px;">🛡️</div>
+        <h1>Registro por Garita</h1>
+        <p class="subtitle" style="margin-bottom:32px;">El registro de ingreso es realizado por el guardia de seguridad.<br>Dirigite a la cabina de garita para que te registren.</p>
+        <div class="card" style="background:rgba(0,153,168,0.06); border:1px solid rgba(0,153,168,0.2);">
+          <p style="color:${colors.textSecondary}; font-size:15px; margin:0;">
+            Una vez registrado, el guardia te entregará un <strong>código QR</strong><br>que podés escanear para seguir el estado de tu turno.
+          </p>
+        </div>
+      </div>
+    </body></html>
+  `);
+});
+
+// LEGACY HANDLER (conservado por compatibilidad, no accesible)
+if (false) {
   const carriers = [
     "Acaricia Transporte Logan","Adrian Servicio","Alfa Omega","Americantec","Andesmar","Andreani","Apicol","ASPELEYTER","Avaltrans","AYG Trucks",
     "Bahia SRL","Balboa","Bataglia","Beira Mar","Bessone","Better Catering","Biopak","BL Puerto y Logística","Blanca Luna","Brouclean","Bulonera Central","Bulonera Pacheco",
@@ -1444,7 +1470,7 @@ app.get('/entrada', (req, res) => {
       </script>
     </body></html>
   `);
-});
+} // end if(false)
 
 // ==================== PÁGINA TURNO (ESTADO DEL CHOFER) ====================
 app.get('/turno/:id', (req, res) => {
@@ -2880,6 +2906,7 @@ app.get('/garita-registro', (req, res) => {
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
       ${fontLink}
       <title>Garita - Registro de Ingresos/Egresos</title>
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
       <style>${styles}
         .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin-bottom: 24px; }
         label { display: block; text-align: left; color: ${colors.textMuted}; font-size: 13px; margin-bottom: 4px; margin-top: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
@@ -3030,6 +3057,13 @@ app.get('/garita-registro', (req, res) => {
               <label>VIAJE HDR</label>
               <input type="text" id="ing-viaje" placeholder="N° de viaje (opcional)">
 
+              <label>ENTRA VACÍO O CON CARGA *</label>
+              <select id="ing-carga">
+                <option value="" disabled selected>Seleccioná...</option>
+                <option value="VACIO">Vacío</option>
+                <option value="CON_CARGA">Con carga</option>
+              </select>
+
               <label>OBSERVACIONES DE INGRESO</label>
               <textarea id="ing-obs" placeholder="Observaciones..."></textarea>
 
@@ -3089,6 +3123,18 @@ app.get('/garita-registro', (req, res) => {
 
       <!-- Toast -->
       <div class="toast" id="toast"></div>
+
+      <!-- Modal QR -->
+      <div class="modal-overlay" id="qr-modal" style="display:none; align-items:center; justify-content:center;">
+        <div class="modal" style="max-width:360px; text-align:center; padding:32px 24px;">
+          <h2 style="margin-bottom:4px;" id="qr-turno-title">Turno registrado</h2>
+          <p style="color:${colors.textMuted}; font-size:14px; margin-bottom:20px;">Mostrá este QR al chofer para que pueda seguir su turno desde su celular</p>
+          <div id="qr-container" style="display:flex; justify-content:center; margin-bottom:20px;"></div>
+          <p style="font-size:12px; color:${colors.textMuted}; margin-bottom:20px;" id="qr-url-text"></p>
+          <button class="btn btn-primary" onclick="closeQRModal()" style="margin-bottom:8px;">Registrar otro ingreso</button>
+          <button class="btn" onclick="printQR()" style="background:${colors.light}; color:${colors.textPrimary};">Imprimir QR</button>
+        </div>
+      </div>
 
       <!-- Modal detalle -->
       <div class="modal-overlay" id="modal">
@@ -3247,9 +3293,14 @@ app.get('/garita-registro', (req, res) => {
           const truck = document.getElementById('ing-truck').value.trim().toUpperCase();
           const carrier = document.getElementById('ing-carrier').value.trim();
           const chofer = document.getElementById('ing-chofer').value.trim();
+          const carga_estado = document.getElementById('ing-carga').value;
 
           if (!truck || !carrier || !chofer) {
             showIngresoError('Completá patente, transportista y nombre del chofer');
+            return;
+          }
+          if (!carga_estado) {
+            showIngresoError('Indicá si el camión entra vacío o con carga');
             return;
           }
 
@@ -3271,6 +3322,7 @@ app.get('/garita-registro', (req, res) => {
                 warehouse: document.getElementById('ing-nave').value,
                 obs_ingreso: document.getElementById('ing-obs').value.trim(),
                 viaje_hdr: document.getElementById('ing-viaje').value.trim(),
+                carga_estado,
                 registrado_por: guardEmail
               })
             });
@@ -3278,17 +3330,45 @@ app.get('/garita-registro', (req, res) => {
 
             if (!data.success) { showIngresoError(data.error); return; }
 
-            const msg = data.enriched
-              ? '✅ Turno ' + data.turno_id + ' enriquecido con datos de garita'
-              : '✅ Ingreso registrado: ' + data.turno_id;
-            showToast(msg);
             resetIngresoForm();
             loadKPIs();
+            showQRModal(data.turno_id);
           } catch(e) {
             showIngresoError('Error de conexión');
           } finally {
             btn.disabled = false; btn.textContent = 'Registrar Ingreso';
           }
+        }
+
+        // ===== MODAL QR =====
+        function showQRModal(turnoId) {
+          const url = window.location.origin + '/turno/' + turnoId;
+          document.getElementById('qr-turno-title').textContent = 'Turno ' + turnoId;
+          document.getElementById('qr-url-text').textContent = url;
+          const container = document.getElementById('qr-container');
+          container.innerHTML = '';
+          new QRCode(container, { text: url, width: 220, height: 220, correctLevel: QRCode.CorrectLevel.M });
+          const modal = document.getElementById('qr-modal');
+          modal.style.display = 'flex';
+        }
+
+        function closeQRModal() {
+          document.getElementById('qr-modal').style.display = 'none';
+          document.getElementById('ing-truck').focus();
+        }
+
+        function printQR() {
+          const url = document.getElementById('qr-url-text').textContent;
+          const title = document.getElementById('qr-turno-title').textContent;
+          const qrImg = document.querySelector('#qr-container img');
+          if (!qrImg) return;
+          const win = window.open('', '_blank');
+          win.document.write('<html><body style="text-align:center;font-family:sans-serif;padding:40px;">' +
+            '<h2>' + title + '</h2><img src="' + qrImg.src + '" style="width:220px;height:220px;"><br>' +
+            '<p style="font-size:12px;color:#666;">' + url + '</p>' +
+            '<p style="font-size:13px;">Escaneá para seguir tu turno en OCASA</p></body></html>');
+          win.document.close();
+          win.print();
         }
 
         function showIngresoError(msg) {
@@ -3302,10 +3382,10 @@ app.get('/garita-registro', (req, res) => {
             document.getElementById(id).value = '';
           });
           document.getElementById('ing-nave').value = '';
+          document.getElementById('ing-carga').value = '';
           document.getElementById('ing-obs').value = '';
           document.getElementById('ingreso-banner').innerHTML = '';
           enrichingTurno = null;
-          document.getElementById('ing-truck').focus();
         }
 
         // ===== BUSCAR PARA EGRESO =====
@@ -3457,6 +3537,7 @@ app.get('/garita-registro', (req, res) => {
 
           let html = '<div style="margin-bottom:16px;">';
           if (t.chofer) html += '<div class="row" style="display:flex; justify-content:space-between; margin-bottom:6px;"><span style="opacity:0.6;">Chofer</span><span style="font-weight:600;">' + t.chofer + '</span></div>';
+          if (t.carga_estado) html += '<div class="row" style="display:flex; justify-content:space-between; margin-bottom:6px;"><span style="opacity:0.6;">Carga</span><span>' + (t.carga_estado === 'CON_CARGA' ? 'Con carga' : 'Vacío') + '</span></div>';
           if (t.dni_chofer) html += '<div class="row" style="display:flex; justify-content:space-between; margin-bottom:6px;"><span style="opacity:0.6;">DNI</span><span>' + t.dni_chofer + '</span></div>';
           if (t.celular_chofer) html += '<div class="row" style="display:flex; justify-content:space-between; margin-bottom:6px;"><span style="opacity:0.6;">Celular</span><span>' + t.celular_chofer + '</span></div>';
           if (t.patente_semi) html += '<div class="row" style="display:flex; justify-content:space-between; margin-bottom:6px;"><span style="opacity:0.6;">Semi</span><span>' + t.patente_semi + '</span></div>';
@@ -3894,6 +3975,15 @@ app.get('/setup-db-v2', async (req, res) => {
     `);
 
     res.json({ success: true, message: 'Migración V2 completada: campos garita + tabla usuarios' });
+  } catch(e) {
+    res.json({ success: false, error: e.message });
+  }
+});
+
+app.get('/setup-db-v3', async (req, res) => {
+  try {
+    await pool.query(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS carga_estado VARCHAR(20) DEFAULT 'VACIO'`);
+    res.json({ success: true, message: 'Migración V3 completada: campo carga_estado agregado' });
   } catch(e) {
     res.json({ success: false, error: e.message });
   }
