@@ -696,8 +696,8 @@ app.post('/api/garita/entrada', async (req, res) => {
         }
       }
 
-      const countResult = await client.query('SELECT COUNT(*) FROM turnos');
-      const turnoId = 'TRN-' + String(parseInt(countResult.rows[0].count) + 1).padStart(4, '0');
+      const countResult = await client.query('SELECT COALESCE(MAX(id), 0) as maxid FROM turnos');
+      const turnoId = 'TRN-' + String(parseInt(countResult.rows[0].maxid) + 1).padStart(4, '0');
 
       await client.query(
         `INSERT INTO turnos (turno_id, truck, carrier, chofer, dni_chofer, celular_chofer, patente_semi,
