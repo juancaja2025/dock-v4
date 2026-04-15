@@ -546,6 +546,7 @@ app.post('/api/reasignar', async (req, res) => {
 // Atraque automático (escanear QR de dársena)
 app.post('/api/dock/:dockId', async (req, res) => {
   const dockId = req.params.dockId;
+  const { tacos_entregados, tacos_devueltos } = req.body || {};
 
   try {
     const result = await withTransaction(async (client) => {
@@ -562,14 +563,14 @@ app.post('/api/dock/:dockId', async (req, res) => {
 
       if (t.status === 'DARSENA_ASIGNADA') {
         await client.query(
-          "UPDATE turnos SET status = 'ATRACADO', ts_atracado = CURRENT_TIMESTAMP WHERE turno_id = $1",
-          [t.turno_id]
+          "UPDATE turnos SET status = 'ATRACADO', ts_atracado = CURRENT_TIMESTAMP, tacos_entregados = $2 WHERE turno_id = $1",
+          [t.turno_id, tacos_entregados === true]
         );
         return { success: true, action: 'atracado', truck: t.truck };
       } else if (t.status === 'ATRACADO') {
         await client.query(
-          "UPDATE turnos SET status = 'DESATRACADO', dock = '', ts_desatracado = CURRENT_TIMESTAMP WHERE turno_id = $1",
-          [t.turno_id]
+          "UPDATE turnos SET status = 'DESATRACADO', dock = '', ts_desatracado = CURRENT_TIMESTAMP, tacos_devueltos = $2 WHERE turno_id = $1",
+          [t.turno_id, tacos_devueltos === true]
         );
         // Buscar turno hermano con dársena asignada (flujo multi-nave)
         let nextDock = null;
@@ -1691,6 +1692,30 @@ app.get('/dock/:dockId', (req, res) => {
             const accionLabel = accion === 'atracar' ? '⚓ Confirmar Atraque' : '🚪 Confirmar Desatraque';
             const accionColor = accion === 'atracar' ? 'btn-primary' : 'btn-orange';
 
+            // Tacos de goma: prompt distinto según atraque/desatraque
+            let tacosHtml = '';
+            if (accion === 'atracar') {
+              tacosHtml =
+                '<div style="margin-top:16px; padding:14px; background:rgba(0,153,168,0.06); border:1px solid rgba(0,153,168,0.2); border-radius:10px;">' +
+                '<p style="margin:0 0 10px 0; font-weight:600; font-size:14px;">🧱 ¿Se entregaron los tacos de goma?</p>' +
+                '<div style="display:flex; gap:8px;">' +
+                '<label style="flex:1; display:flex; align-items:center; gap:8px; padding:10px; background:white; border:2px solid ${colors.border}; border-radius:8px; cursor:pointer;">' +
+                '<input type="radio" name="tacos" value="si" style="width:auto; min-height:auto; margin:0;"> Sí, entregué</label>' +
+                '<label style="flex:1; display:flex; align-items:center; gap:8px; padding:10px; background:white; border:2px solid ${colors.border}; border-radius:8px; cursor:pointer;">' +
+                '<input type="radio" name="tacos" value="no" style="width:auto; min-height:auto; margin:0;" checked> No entregué</label>' +
+                '</div></div>';
+            } else if (accion === 'desatracar' && turno.tacos_entregados) {
+              tacosHtml =
+                '<div style="margin-top:16px; padding:14px; background:#fffbeb; border:1px solid #fde68a; border-radius:10px;">' +
+                '<p style="margin:0 0 10px 0; font-weight:600; font-size:14px; color:#92400e;">🧱 Se entregaron tacos. ¿Los devolvió?</p>' +
+                '<div style="display:flex; gap:8px;">' +
+                '<label style="flex:1; display:flex; align-items:center; gap:8px; padding:10px; background:white; border:2px solid ${colors.border}; border-radius:8px; cursor:pointer;">' +
+                '<input type="radio" name="tacos" value="si" style="width:auto; min-height:auto; margin:0;" checked> Sí, devolvió</label>' +
+                '<label style="flex:1; display:flex; align-items:center; gap:8px; padding:10px; background:white; border:2px solid #fca5a5; border-radius:8px; cursor:pointer;">' +
+                '<input type="radio" name="tacos" value="no" style="width:auto; min-height:auto; margin:0;"> No devolvió</label>' +
+                '</div></div>';
+            }
+
             document.getElementById('preview').style.display = 'block';
             document.getElementById('preview').innerHTML =
               '<div class="card" style="text-align:left;">' +
@@ -1705,9 +1730,10 @@ app.get('/dock/:dockId', (req, res) => {
               '<p style="margin: 6px 0;"><strong>Nave:</strong> ' + (turno.warehouse || '-') + '</p>' +
               '<p style="margin: 6px 0;"><strong>Estado:</strong> ' + turno.status.replace(/_/g, ' ') + '</p>' +
               '</div>' +
+              tacosHtml +
               '</div>' +
               '<p style="color:${colors.textSecondary}; font-size:14px; font-weight:500; margin-bottom: 8px;">¿Confirmar <strong>' + accion + '</strong> de este camión?</p>' +
-              '<button class="btn ' + accionColor + '" onclick="ejecutar()" id="btnConfirm">' + accionLabel + '</button>' +
+              '<button class="btn ' + accionColor + '" onclick="ejecutar(\\'' + accion + '\\')" id="btnConfirm">' + accionLabel + '</button>' +
               '<button class="btn" style="background:${colors.light}; color:${colors.textSecondary}; margin-top:8px;" onclick="location.reload()">Cancelar</button>';
           } catch(e) {
             document.getElementById('loading').style.display = 'none';
@@ -1719,12 +1745,22 @@ app.get('/dock/:dockId', (req, res) => {
           }
         }
 
-        async function ejecutar() {
+        async function ejecutar(accion) {
           document.getElementById('btnConfirm').disabled = true;
           document.getElementById('btnConfirm').innerHTML = '⏳ Procesando...';
 
+          const tacosRadio = document.querySelector('input[name="tacos"]:checked');
+          const tacosVal = tacosRadio ? (tacosRadio.value === 'si') : false;
+          const body = {};
+          if (accion === 'atracar') body.tacos_entregados = tacosVal;
+          if (accion === 'desatracar') body.tacos_devueltos = tacosVal;
+
           try {
-            const res = await fetch('/api/dock/${dockId}', { method: 'POST' });
+            const res = await fetch('/api/dock/${dockId}', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(body)
+            });
             const data = await res.json();
 
             document.getElementById('preview').style.display = 'none';
@@ -3466,7 +3502,17 @@ app.get('/garita-registro', (req, res) => {
             const mins = Math.floor((tiempoMs % 3600000) / 60000);
             const tiempoStr = hrs > 0 ? hrs + 'h ' + mins + 'm' : mins + ' min';
 
-            document.getElementById('egreso-info').innerHTML =
+            // Alerta tacos: cualquier turno de esta patente con tacos entregados y no devueltos
+            const debeTacos = (data.turnos || []).some(x => x.tacos_entregados && !x.tacos_devueltos);
+            let alertaTacos = '';
+            if (debeTacos) {
+              alertaTacos =
+                '<div style="background:#fef2f2; border:2px solid #dc2626; color:#991b1b; padding:14px 16px; border-radius:10px; margin-bottom:12px; font-weight:600;">' +
+                '⚠️ ATENCIÓN: El chofer debe devolver los TACOS DE GOMA antes de salir del predio.' +
+                '</div>';
+            }
+
+            document.getElementById('egreso-info').innerHTML = alertaTacos +
               '<div class="row"><span class="label">Patente</span><span class="value">' + t.truck + '</span></div>' +
               '<div class="row"><span class="label">Transportista</span><span class="value">' + (t.carrier || '-') + '</span></div>' +
               '<div class="row"><span class="label">Chofer</span><span class="value">' + (t.chofer || '-') + '</span></div>' +
@@ -4031,6 +4077,16 @@ app.get('/setup-db-v3', async (req, res) => {
   try {
     await pool.query(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS carga_estado VARCHAR(20) DEFAULT 'VACIO'`);
     res.json({ success: true, message: 'Migración V3 completada: campo carga_estado agregado' });
+  } catch(e) {
+    res.json({ success: false, error: e.message });
+  }
+});
+
+app.get('/setup-db-v4', async (req, res) => {
+  try {
+    await pool.query(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS tacos_entregados BOOLEAN DEFAULT false`);
+    await pool.query(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS tacos_devueltos BOOLEAN DEFAULT false`);
+    res.json({ success: true, message: 'Migración V4 completada: campos tacos_entregados y tacos_devueltos agregados' });
   } catch(e) {
     res.json({ success: false, error: e.message });
   }
