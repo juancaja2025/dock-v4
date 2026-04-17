@@ -2947,8 +2947,9 @@ app.get('/garita-registro', (req, res) => {
         .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin-bottom: 24px; }
         label { display: block; text-align: left; color: ${colors.textMuted}; font-size: 13px; margin-bottom: 4px; margin-top: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
         .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-        textarea { width: 100%; padding: 12px; border: 2px solid rgba(255,255,255,0.1); border-radius: 12px; font-size: 15px; background: rgba(255,255,255,0.05); color: white; min-height: 80px; resize: vertical; font-family: inherit; }
-        textarea:focus { outline: none; border-color: ${colors.primary}; }
+        textarea { width: 100%; padding: 12px; border: 2px solid ${colors.border}; border-radius: 12px; font-size: 15px; background: ${colors.bgCard}; color: ${colors.textPrimary}; min-height: 80px; resize: vertical; font-family: 'Montserrat', sans-serif; }
+        textarea::placeholder { color: ${colors.textMuted}; }
+        textarea:focus { outline: none; border-color: ${colors.primary}; box-shadow: 0 0 0 3px rgba(0,153,168,0.12); }
         .banner-info { background: rgba(0,153,168,0.15); border: 1px solid ${colors.primary}; color: ${colors.primary}; padding: 12px; border-radius: 8px; margin-bottom: 12px; font-size: 14px; }
         .banner-error { background: rgba(239,68,68,0.15); border: 1px solid #ef4444; color: #fca5a5; padding: 12px; border-radius: 8px; margin-bottom: 12px; font-size: 14px; }
         .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: ${colors.green}; color: white; padding: 14px 28px; border-radius: 12px; font-weight: 600; z-index: 2000; display: none; box-shadow: 0 4px 20px rgba(0,0,0,0.3); }
