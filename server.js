@@ -3513,13 +3513,28 @@ app.get('/garita-registro', (req, res) => {
                 '</div>';
             }
 
+            // Estado de tacos: agregado contra todos los turnos de la patente
+            let tacosTexto = 'No se entregaron';
+            let tacosColor = '${colors.textMuted}';
+            const algunEntregado = (data.turnos || []).some(x => x.tacos_entregados);
+            if (algunEntregado) {
+              if (debeTacos) {
+                tacosTexto = '⚠️ Entregados — NO devueltos';
+                tacosColor = '#dc2626';
+              } else {
+                tacosTexto = '✅ Entregados y devueltos';
+                tacosColor = '#16a34a';
+              }
+            }
+
             document.getElementById('egreso-info').innerHTML = alertaTacos +
               '<div class="row"><span class="label">Patente</span><span class="value">' + t.truck + '</span></div>' +
               '<div class="row"><span class="label">Transportista</span><span class="value">' + (t.carrier || '-') + '</span></div>' +
               '<div class="row"><span class="label">Chofer</span><span class="value">' + (t.chofer || '-') + '</span></div>' +
               '<div class="row"><span class="label">Tiempo en predio</span><span class="value">' + tiempoStr + '</span></div>' +
               '<div class="row"><span class="label">Estado actual</span><span class="value">' + getStatusBadge(t.status) + '</span></div>' +
-              '<div class="row"><span class="label">Ingreso</span><span class="value">' + formatDateTime(t.ts_entrada) + '</span></div>';
+              '<div class="row"><span class="label">Ingreso</span><span class="value">' + formatDateTime(t.ts_entrada) + '</span></div>' +
+              '<div class="row"><span class="label">Tacos de goma</span><span class="value" style="color:' + tacosColor + '; font-weight:600;">' + tacosTexto + '</span></div>';
 
             resultEl.style.display = 'block';
           } catch(e) {
